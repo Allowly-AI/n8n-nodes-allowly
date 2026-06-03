@@ -1,0 +1,49 @@
+{
+  "name": "n8n-nodes-allowly",
+  "version": "0.1.0",
+  "description": "n8n community node for creating Allowly authorizations and checking agent actions",
+  "keywords": [
+    "n8n-community-node-package",
+    "n8n",
+    "allowly",
+    "authorization",
+    "ai-agent",
+    "receipts"
+  ],
+  "license": "MIT",
+  "homepage": "https://allowly.ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Allowly-AI/n8n-nodes-allowly.git"
+  },
+  "author": "Allowly LLC",
+  "main": "dist/nodes/Allowly/Allowly.node.js",
+  "types": "dist/nodes/Allowly/Allowly.node.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "prepack": "npm run build"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "credentials": [
+      "dist/credentials/AllowlyApi.credentials.js"
+    ],
+    "nodes": [
+      "dist/nodes/Allowly/Allowly.node.js"
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "n8n-workflow": "^1.82.0",
+    "typescript": "^5.4.5"
+  },
+  "peerDependencies": {
+    "n8n-workflow": "*"
+  }
+}
