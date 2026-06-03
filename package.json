@@ -20,7 +20,7 @@
   "main": "dist/nodes/Allowly/Allowly.node.js",
   "types": "dist/nodes/Allowly/Allowly.node.d.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
     "dev": "tsc -p tsconfig.json --watch",
     "lint": "tsc -p tsconfig.json --noEmit",
     "prepack": "npm run build"

@@ -1,9 +1,11 @@
-import { createHmac } from 'crypto';
+import { createHash, createHmac } from 'crypto';
 import type {
 	IDataObject,
 	IExecuteFunctions,
 	IHttpRequestOptions,
+	ILoadOptionsFunctions,
 	INodeExecutionData,
+	INodePropertyOptions,
 	INodeType,
 	INodeTypeDescription,
 } from 'n8n-workflow';
@@ -29,6 +31,32 @@ type AllowlyScopeResult = {
 	[key: string]: unknown;
 };
 
+type AllowlyAgentScopeBundle = {
+	id?: string;
+	bundle_id?: string;
+	agent_id?: string;
+	scopes?: Array<{ name?: string }>;
+	requires_confirm_for?: string[];
+	requires_escalation_for?: string[];
+	default_expiry_days?: number | null;
+	description?: string | null;
+	[key: string]: unknown;
+};
+
+type AllowlyAgentScopeBundleListResponse = {
+	items?: AllowlyAgentScopeBundle[];
+	[key: string]: unknown;
+};
+
+type CachedBundleOptions = {
+	expiresAt: number;
+	options: INodePropertyOptions[];
+};
+
+const BUNDLE_OPTIONS_CACHE_TTL_MS = 60_000;
+const BUNDLE_OPTIONS_CACHE_MAX_ENTRIES = 100;
+const bundleOptionsCache = new Map<string, CachedBundleOptions>();
+
 function parseScopes(value: string): string[] {
 	return Array.from(
 		new Set(
@@ -44,6 +72,73 @@ function userIdFromEmail(email: string, pepper: string): string {
 	const normalized = email.trim().toLowerCase();
 	const digest = createHmac('sha256', pepper).update(normalized).digest('base64url');
 	return `email_hmac:v1:${digest}`;
+}
+
+function bundleOptionsCacheKey(apiUrl: string, apiKey: string): string {
+	const keyHash = createHash('sha256').update(apiKey).digest('base64url').slice(0, 32);
+	return `${apiUrl}:${keyHash}`;
+}
+
+function getCachedBundleOptions(cacheKey: string): INodePropertyOptions[] | null {
+	const cached = bundleOptionsCache.get(cacheKey);
+	if (!cached) return null;
+	if (cached.expiresAt <= Date.now()) {
+		bundleOptionsCache.delete(cacheKey);
+		return null;
+	}
+	return cached.options;
+}
+
+function setCachedBundleOptions(cacheKey: string, options: INodePropertyOptions[]): void {
+	if (bundleOptionsCache.size >= BUNDLE_OPTIONS_CACHE_MAX_ENTRIES) {
+		const oldestKey = bundleOptionsCache.keys().next().value;
+		if (oldestKey) bundleOptionsCache.delete(oldestKey);
+	}
+	bundleOptionsCache.set(cacheKey, {
+		expiresAt: Date.now() + BUNDLE_OPTIONS_CACHE_TTL_MS,
+		options,
+	});
+}
+
+function bundleOptionDescription(bundle: AllowlyAgentScopeBundle): string {
+	const parts: string[] = [];
+	const scopes = Array.isArray(bundle.scopes) ? bundle.scopes : [];
+	const scopeNames = scopes
+		.map((scope) => scope.name)
+		.filter((name): name is string => Boolean(name));
+
+	if (bundle.description) parts.push(bundle.description);
+	if (scopeNames.length > 0) {
+		parts.push(`${scopeNames.length} scope${scopeNames.length === 1 ? '' : 's'}: ${scopeNames.slice(0, 4).join(', ')}`);
+	}
+	if (bundle.requires_confirm_for?.length) parts.push(`confirm: ${bundle.requires_confirm_for.join(', ')}`);
+	if (bundle.requires_escalation_for?.length) parts.push(`escalate: ${bundle.requires_escalation_for.join(', ')}`);
+	if (bundle.default_expiry_days) parts.push(`expires in ${bundle.default_expiry_days}d`);
+
+	return parts.join(' · ');
+}
+
+function httpStatusCode(error: unknown): number | undefined {
+	if (!error || typeof error !== 'object') return undefined;
+
+	const err = error as {
+		status?: unknown;
+		statusCode?: unknown;
+		response?: {
+			status?: unknown;
+			statusCode?: unknown;
+		};
+	};
+	const candidates = [err.statusCode, err.status, err.response?.statusCode, err.response?.status];
+	for (const candidate of candidates) {
+		if (typeof candidate === 'number') return candidate;
+		if (typeof candidate === 'string') {
+			const parsed = Number(candidate);
+			if (Number.isInteger(parsed)) return parsed;
+		}
+	}
+
+	return undefined;
 }
 
 function parseContext(value: string, executeFunctions: IExecuteFunctions, itemIndex: number): Record<string, unknown> {
@@ -68,7 +163,7 @@ export class Allowly implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'Allowly',
 		name: 'allowly',
-		icon: 'fa:shield-alt',
+		icon: 'file:allowly.svg',
 		group: ['transform'],
 		version: 1,
 		subtitle: '={{$parameter["operation"]}}',
@@ -109,10 +204,14 @@ export class Allowly implements INodeType {
 			{
 				displayName: 'Bundle ID',
 				name: 'bundleId',
-				type: 'string',
+				type: 'options',
 				default: '',
+				options: [],
+				typeOptions: {
+					loadOptionsMethod: 'getAgentScopeBundles',
+				},
 				required: true,
-				description: 'Allowly agent scope bundle ID to authorize for this user.',
+				description: 'Allowly agent scope bundle ID to authorize for this user. Loaded from the selected API credential workspace.',
 				displayOptions: {
 					show: {
 						operation: ['createAuthorization'],
@@ -294,6 +393,61 @@ export class Allowly implements INodeType {
 				},
 			},
 		],
+	};
+
+	methods = {
+		loadOptions: {
+			async getAgentScopeBundles(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+				const credentials = await this.getCredentials('allowlyApi');
+				const apiKey = String(credentials.apiKey ?? '');
+				const apiUrl = String(credentials.apiUrl ?? 'https://api.allowly.ai').replace(/\/+$/, '');
+				const cacheKey = bundleOptionsCacheKey(apiUrl, apiKey);
+				const cachedOptions = getCachedBundleOptions(cacheKey);
+				if (cachedOptions) return cachedOptions;
+
+				const options: IHttpRequestOptions = {
+					method: 'GET',
+					url: `${apiUrl}/v1/agent-scope-bundles?limit=100`,
+					headers: {
+						Authorization: `Bearer ${apiKey}`,
+					},
+					json: true,
+				};
+
+				try {
+					const response = (await this.helpers.httpRequest(options)) as AllowlyAgentScopeBundleListResponse;
+					const bundles = response.items ?? [];
+					const bundleOptions: INodePropertyOptions[] = [];
+
+					for (const bundle of bundles) {
+						const id = String(bundle.id ?? bundle.bundle_id ?? '').trim();
+						if (!id) continue;
+						const agentId = String(bundle.agent_id ?? '').trim();
+
+						bundleOptions.push({
+							name: agentId ? `${id} (${agentId})` : id,
+							value: id,
+							description: bundleOptionDescription(bundle),
+						});
+					}
+
+					setCachedBundleOptions(cacheKey, bundleOptions);
+					return bundleOptions;
+				} catch (error) {
+					if (httpStatusCode(error) === 429) {
+						throw new NodeOperationError(
+							this.getNode(),
+							'Could not load Allowly agent scope bundles: rate limit reached. Wait a moment, then reload the Bundle ID options.',
+						);
+					}
+
+					throw new NodeOperationError(
+						this.getNode(),
+						`Could not load Allowly agent scope bundles: ${(error as Error).message}. The selected credential must be able to call GET /v1/agent-scope-bundles.`,
+					);
+				}
+			},
+		},
 	};
 
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {

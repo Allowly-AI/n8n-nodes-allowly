@@ -42,6 +42,8 @@ Authorization: Bearer allowly_live_...
 
 The response includes `authorization_id`. Store it in your workflow or app data, then use it with the **Check** operation.
 
+The **Bundle ID** field is loaded from the Allowly workspace attached to the selected credential. This calls `GET /v1/agent-scope-bundles` so n8n users can choose a bundle instead of copying IDs from the dashboard. Bundle options are cached in-process for 60 seconds per API URL and credential to avoid repeated dropdown reloads hitting the API.
+
 Docs: [Authorizations](https://allowly.ai/docs/api-reference/authorizations/) and [agent scope bundles](https://allowly.ai/docs/api-reference/authorizations/#agent-scope-bundles).
 
 ### Check
@@ -76,9 +78,11 @@ Docs: [Check API](https://allowly.ai/docs/api-reference/check/) and [decisions a
 - **API Key**: Allowly API key used to call the API. Keep it server-side.
 - **API URL**: Allowly API base URL. Defaults to `https://api.allowly.ai`.
 
+For the smoothest setup, use a key that can both list agent scope bundles and create authorizations. If bundle prefetch fails, check that the credential can call `GET /v1/agent-scope-bundles`. If prefetch hits a rate limit, wait briefly and reload the Bundle ID options.
+
 ### Create Authorization fields
 
-- **Bundle ID**: reusable agent scope bundle ID from Allowly. The bundle defines the agent and the scopes the user is authorizing.
+- **Bundle ID**: reusable agent scope bundle ID from Allowly. The dropdown is prefetched from the credential's workspace. The bundle defines the agent and the scopes the user is authorizing.
 - **User Identifier**: choose how this node produces `user_id`.
 - **User ID**: opaque internal app user ID sent directly as `user_id`.
 - **User Email**: email to mask locally when **User Identifier** is set to **Mask Email Locally**.
