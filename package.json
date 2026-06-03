@@ -16,14 +16,20 @@
     "type": "git",
     "url": "git+https://github.com/Allowly-AI/n8n-nodes-allowly.git"
   },
-  "author": "Allowly LLC",
+  "author": {
+    "name": "Allowly LLC"
+  },
   "main": "dist/nodes/Allowly/Allowly.node.js",
   "types": "dist/nodes/Allowly/Allowly.node.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
-    "dev": "tsc -p tsconfig.json --watch",
-    "lint": "tsc -p tsconfig.json --noEmit",
-    "prepack": "npm run build"
+    "dev": "n8n-node dev",
+    "lint": "n8n-node lint",
+    "lint:fix": "n8n-node lint --fix",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepack": "npm run build",
+    "release": "n8n-node release",
+    "scan": "scan-community-package n8n-nodes-allowly"
   },
   "files": [
     "dist",
@@ -39,11 +45,19 @@
     ]
   },
   "devDependencies": {
+    "@n8n/eslint-plugin-community-nodes": "^0.9.0",
+    "@n8n/node-cli": "^0.34.0",
+    "@n8n/scan-community-package": "^0.20.0",
     "@types/node": "^20.14.10",
     "n8n-workflow": "^1.82.0",
     "typescript": "^5.4.5"
   },
   "peerDependencies": {
     "n8n-workflow": "*"
+  },
+  "overrides": {
+    "@n8n/node-cli": {
+      "change-case": "4.1.2"
+    }
   }
 }

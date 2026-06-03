@@ -147,10 +147,12 @@ function parseContext(value: string, executeFunctions: IExecuteFunctions, itemIn
 	try {
 		const parsed: unknown = JSON.parse(value);
 		if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-			throw new Error('Context JSON must be an object.');
+			throw new NodeOperationError(executeFunctions.getNode(), 'Context JSON must be an object', { itemIndex });
 		}
 		return parsed as Record<string, unknown>;
 	} catch (error) {
+		if (error instanceof NodeOperationError) throw error;
+
 		throw new NodeOperationError(
 			executeFunctions.getNode(),
 			`Context JSON is invalid: ${(error as Error).message}`,
@@ -202,7 +204,7 @@ export class Allowly implements INodeType {
 				default: 'check',
 			},
 			{
-				displayName: 'Bundle ID',
+				displayName: 'Bundle Name or ID',
 				name: 'bundleId',
 				type: 'options',
 				default: '',
@@ -211,7 +213,7 @@ export class Allowly implements INodeType {
 					loadOptionsMethod: 'getAgentScopeBundles',
 				},
 				required: true,
-				description: 'Allowly agent scope bundle ID to authorize for this user. Loaded from the selected API credential workspace.',
+				description: 'Allowly agent scope bundle ID to authorize for this user. Loaded from the selected API credential workspace. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 				displayOptions: {
 					show: {
 						operation: ['createAuthorization'],
@@ -236,7 +238,7 @@ export class Allowly implements INodeType {
 					},
 				],
 				default: 'opaque',
-				description: 'Choose how the Allowly user_id is produced.',
+				description: 'Choose how the Allowly user_id is produced',
 				displayOptions: {
 					show: {
 						operation: ['createAuthorization'],
@@ -309,7 +311,7 @@ export class Allowly implements INodeType {
 				type: 'string',
 				default: '',
 				required: true,
-				description: 'One scope, or multiple scopes separated by commas or new lines.',
+				description: 'One scope, or multiple scopes separated by commas or new lines',
 				placeholder: 'email.send',
 				displayOptions: {
 					show: {
@@ -322,7 +324,7 @@ export class Allowly implements INodeType {
 				name: 'resource',
 				type: 'string',
 				default: '',
-				description: 'Optional target resource for the action, for example gmail:thread:abc123.',
+				description: 'Optional target resource for the action, for example gmail:thread:abc123',
 				displayOptions: {
 					show: {
 						operation: ['check'],
@@ -334,7 +336,7 @@ export class Allowly implements INodeType {
 				name: 'sessionId',
 				type: 'string',
 				default: '',
-				description: 'Optional workflow or agent-session identifier copied into the signed receipt.',
+				description: 'Optional workflow or agent-session identifier copied into the signed receipt',
 				displayOptions: {
 					show: {
 						operation: ['check'],
@@ -385,7 +387,7 @@ export class Allowly implements INodeType {
 				name: 'contextJson',
 				type: 'json',
 				default: '{}',
-				description: 'Optional JSON object copied into the Allowly check context and receipt.',
+				description: 'Optional JSON object copied into the Allowly check context and receipt',
 				displayOptions: {
 					show: {
 						operation: ['check'],
@@ -393,6 +395,7 @@ export class Allowly implements INodeType {
 				},
 			},
 		],
+		usableAsTool: true,
 	};
 
 	methods = {
@@ -408,14 +411,15 @@ export class Allowly implements INodeType {
 				const options: IHttpRequestOptions = {
 					method: 'GET',
 					url: `${apiUrl}/v1/agent-scope-bundles?limit=100`,
-					headers: {
-						Authorization: `Bearer ${apiKey}`,
-					},
 					json: true,
 				};
 
 				try {
-					const response = (await this.helpers.httpRequest(options)) as AllowlyAgentScopeBundleListResponse;
+					const response = (await this.helpers.httpRequestWithAuthentication.call(
+						this,
+						'allowlyApi',
+						options,
+					)) as AllowlyAgentScopeBundleListResponse;
 					const bundles = response.items ?? [];
 					const bundleOptions: INodePropertyOptions[] = [];
 
@@ -457,7 +461,6 @@ export class Allowly implements INodeType {
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex += 1) {
 			try {
 				const credentials = await this.getCredentials('allowlyApi', itemIndex);
-				const apiKey = String(credentials.apiKey ?? '');
 				const apiUrl = String(credentials.apiUrl ?? 'https://api.allowly.ai').replace(/\/+$/, '');
 				const operation = this.getNodeParameter('operation', itemIndex) as string;
 
@@ -493,7 +496,6 @@ export class Allowly implements INodeType {
 						method: 'POST',
 						url: `${apiUrl}/v1/authorizations`,
 						headers: {
-							Authorization: `Bearer ${apiKey}`,
 							'Content-Type': 'application/json',
 						},
 						body: {
@@ -503,7 +505,11 @@ export class Allowly implements INodeType {
 						json: true,
 					};
 
-					const response = (await this.helpers.httpRequest(options)) as AllowlyAuthorizationResponse;
+					const response = (await this.helpers.httpRequestWithAuthentication.call(
+						this,
+						'allowlyApi',
+						options,
+					)) as AllowlyAuthorizationResponse;
 					returnData.push({
 						json: {
 							authorizationId: response.authorization_id ?? response.authorizationId,
@@ -548,14 +554,17 @@ export class Allowly implements INodeType {
 					method: 'POST',
 					url: `${apiUrl}/v1/check`,
 					headers: {
-						Authorization: `Bearer ${apiKey}`,
 						'Content-Type': 'application/json',
 					},
 					body,
 					json: true,
 				};
 
-				const response = (await this.helpers.httpRequest(options)) as AllowlyCheckResponse;
+				const response = (await this.helpers.httpRequestWithAuthentication.call(
+					this,
+					'allowlyApi',
+					options,
+				)) as AllowlyCheckResponse;
 				const firstScope = scopes[0];
 				const firstResult = response.results?.[firstScope] ?? {};
 
