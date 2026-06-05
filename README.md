@@ -30,7 +30,7 @@ Creates an authorization from a user and an agent scope bundle:
 
 ```http
 POST /v1/authorizations
-Authorization: Bearer allowly_live_...
+Authorization: Bearer allowly_l1_s001_...
 ```
 
 ```json
@@ -52,7 +52,7 @@ Checks one stored authorization before an action runs:
 
 ```http
 POST /v1/check
-Authorization: Bearer allowly_live_...
+Authorization: Bearer allowly_l1_s001_...
 ```
 
 ```json
