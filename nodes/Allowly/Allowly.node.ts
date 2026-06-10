@@ -28,6 +28,7 @@ type AllowlyScopeResult = {
 	decision?: string;
 	reason?: string;
 	receipt?: unknown;
+	policy_eval?: Record<string, unknown> | null;
 	[key: string]: unknown;
 };
 
@@ -574,6 +575,7 @@ export class Allowly implements INodeType {
 						decision: firstResult.decision,
 						reason: firstResult.reason,
 						receipt: firstResult.receipt,
+						policyEval: firstResult.policy_eval ?? null,
 						results: response.results,
 						response,
 					} as IDataObject,
