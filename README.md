@@ -2,7 +2,7 @@
 
 Community n8n node for Allowly.
 
-Use it to create an Allowly authorization from an agent scope bundle, then check that authorization before an AI-agent, tool, or automation step runs. The node returns Allowly's decision object so your workflow can branch on `allow`, `deny`, `confirm`, or `escalate`.
+Use it to create an Allowly authorization from an agent policy, then check that authorization before an AI-agent, tool, or automation step runs. The node returns Allowly's decision object so your workflow can branch on `allow`, `deny`, `confirm`, or `escalate`.
 
 ## Status
 
@@ -26,7 +26,7 @@ No n8n marketplace approval is needed for this first path. npm publication is en
 
 ### Create Authorization
 
-Creates an authorization from a user and an agent scope bundle:
+Creates an authorization from a user and an agent policy:
 
 ```http
 POST /v1/authorizations
@@ -36,15 +36,15 @@ Authorization: Bearer allowly_l1_s001_...
 ```json
 {
   "user_id": "user_123",
-  "bundle_id": "sales_copilot_email_v1"
+  "policy_id": "sales_copilot_email_v1"
 }
 ```
 
-The response includes `authorization_id`. Store it in your workflow or app data, then use it with the **Check** operation.
+The node output includes `authorizationId`. Store it in your workflow or app data, then use it with the **Check** operation.
 
-The **Bundle ID** field is loaded from the Allowly workspace attached to the selected credential. This calls `GET /v1/agent-scope-bundles` so n8n users can choose a bundle instead of copying IDs from the dashboard. Bundle options are cached in-process for 60 seconds per API URL and credential to avoid repeated dropdown reloads hitting the API.
+The **Policy Name or ID** field is loaded from the Allowly workspace attached to the selected credential. This calls `GET /v1/policies` so n8n users can choose a policy instead of copying IDs from the dashboard. The dropdown values come from each policy's `policy_id`. Policy options are cached in-process for 60 seconds per API URL and credential to avoid repeated dropdown reloads hitting the API.
 
-Docs: [Authorizations](https://allowly.ai/docs/api-reference/authorizations/) and [agent scope bundles](https://allowly.ai/docs/api-reference/authorizations/#agent-scope-bundles).
+Docs: [Authorizations](https://allowly.ai/docs/api-reference/authorizations/) and [agent policies](https://allowly.ai/docs/api-reference/authorizations/#agent-policies).
 
 ### Check
 
@@ -67,7 +67,7 @@ Authorization: Bearer allowly_l1_s001_...
 }
 ```
 
-Allowly authorizes from `authorization_id`. The user, agent, scopes, expiry, confirmation rules, escalation rules, and budget cap were defined when the authorization was created. Optional workflow user/agent fields in this node are copied into `context` only; they do not replace the authorization.
+Allowly authorizes from `authorization_id`. The user, agent, allowed actions, expiry, confirmation rules, escalation rules, and budget cap were defined when the authorization was created. Optional workflow user/agent fields in this node are copied into `context` only; they do not replace the authorization.
 
 Docs: [Check API](https://allowly.ai/docs/api-reference/check/) and [decisions and attributes](https://allowly.ai/docs/api-reference/decisions-and-attributes/).
 
@@ -76,13 +76,13 @@ Docs: [Check API](https://allowly.ai/docs/api-reference/check/) and [decisions a
 ### Credential fields
 
 - **API Key**: Allowly API key used to call the API. Keep it server-side.
-- **API URL**: Allowly API base URL. Defaults to `https://api.allowly.ai`.
+- **API URL**: Allowly API origin. Use only the origin, for example `https://api.allowly.ai` or `http://localhost:8080`.
 
-For the smoothest setup, use a key that can both list agent scope bundles and create authorizations. If bundle prefetch fails, check that the credential can call `GET /v1/agent-scope-bundles`. If prefetch hits a rate limit, wait briefly and reload the Bundle ID options.
+For the smoothest setup, use a key that can both list agent policies and create authorizations. If policy prefetch fails, check that the credential can call `GET /v1/policies`. If prefetch hits a rate limit, wait briefly and reload the Policy options.
 
 ### Create Authorization fields
 
-- **Bundle ID**: reusable agent scope bundle ID from Allowly. The dropdown is prefetched from the credential's workspace. The bundle defines the agent and the scopes the user is authorizing.
+- **Policy Name or ID**: reusable agent policy from Allowly. The dropdown is prefetched from the credential's workspace and stores the returned `policy_id`. The policy defines the agent and the actions the user is authorizing.
 - **User Identifier**: choose how this node produces `user_id`.
 - **User ID**: opaque internal app user ID sent directly as `user_id`.
 - **User Email**: email to mask locally when **User Identifier** is set to **Mask Email Locally**.
@@ -90,13 +90,13 @@ For the smoothest setup, use a key that can both list agent scope bundles and cr
 
 ### Check fields
 
-- **Authorization ID**: stored Allowly authorization ID returned by **Create Authorization**.
-- **Scope(s)**: one scope or comma/newline-separated scopes to check.
+- **Authorization**: stored Allowly authorization ID returned by **Create Authorization**.
+- **Action(s)**: one action name or comma/newline-separated action names to check.
 - **Resource**: optional action target, for example `gmail:thread:abc123`.
-- **Session ID**: optional workflow/session label copied into the signed receipt.
+- **Session**: optional workflow/session label copied into the signed receipt.
 - **Estimated Cost Micros**: optional micro-USD estimate for budgeted authorizations. `50_000_000` means `$50.00`.
-- **Workflow User ID**: optional n8n workflow context field for traceability.
-- **Workflow Agent ID**: optional n8n workflow context field for traceability.
+- **Workflow User**: optional n8n workflow context field for traceability.
+- **Workflow Agent**: optional n8n workflow context field for traceability.
 - **Additional Context JSON**: optional JSON object copied into the Allowly check context and receipt.
 
 ## Why not use an email as `user_id`?
@@ -127,7 +127,7 @@ More: [PII-safe identifiers](https://allowly.ai/docs/sdk/identifiers/).
 {
   "authorizationId": "auth_...",
   "userId": "email_hmac:v1:...",
-  "bundleId": "sales_copilot_email_v1",
+  "policyId": "sales_copilot_email_v1",
   "receipt": {
     "status": "pending",
     "receipt_id": "rcp_..."

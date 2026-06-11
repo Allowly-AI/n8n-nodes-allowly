@@ -9,7 +9,7 @@ import type {
 	INodeType,
 	INodeTypeDescription,
 } from 'n8n-workflow';
-import { NodeOperationError } from 'n8n-workflow';
+import { ApplicationError, NodeOperationError } from 'n8n-workflow';
 
 type AllowlyCheckResponse = {
 	authorization_id?: string;
@@ -32,11 +32,10 @@ type AllowlyScopeResult = {
 	[key: string]: unknown;
 };
 
-type AllowlyAgentScopeBundle = {
-	id?: string;
-	bundle_id?: string;
+type AllowlyAgentPolicy = {
+	policy_id?: string;
 	agent_id?: string;
-	scopes?: Array<{ name?: string }>;
+	actions?: Array<{ name?: string }>;
 	requires_confirm_for?: string[];
 	requires_escalation_for?: string[];
 	default_expiry_days?: number | null;
@@ -44,19 +43,50 @@ type AllowlyAgentScopeBundle = {
 	[key: string]: unknown;
 };
 
-type AllowlyAgentScopeBundleListResponse = {
-	items?: AllowlyAgentScopeBundle[];
+type AllowlyAgentPolicyListResponse = {
+	items?: AllowlyAgentPolicy[];
 	[key: string]: unknown;
 };
 
-type CachedBundleOptions = {
+type CachedPolicyOptions = {
 	expiresAt: number;
 	options: INodePropertyOptions[];
 };
 
-const BUNDLE_OPTIONS_CACHE_TTL_MS = 60_000;
-const BUNDLE_OPTIONS_CACHE_MAX_ENTRIES = 100;
-const bundleOptionsCache = new Map<string, CachedBundleOptions>();
+const POLICY_OPTIONS_CACHE_TTL_MS = 60_000;
+const POLICY_OPTIONS_CACHE_MAX_ENTRIES = 100;
+const policyOptionsCache = new Map<string, CachedPolicyOptions>();
+const DEFAULT_API_URL = 'https://api.allowly.ai';
+
+function normalizeApiUrl(value: unknown): string {
+	const raw = String(value ?? DEFAULT_API_URL).trim();
+	if (!raw) return DEFAULT_API_URL;
+
+	let parsed: URL;
+	try {
+		parsed = new URL(raw);
+	} catch {
+		throw new ApplicationError('API URL must be a valid absolute URL.');
+	}
+
+	if (!['https:', 'http:'].includes(parsed.protocol)) {
+		throw new ApplicationError('API URL must use http or https.');
+	}
+	if (!parsed.hostname) {
+		throw new ApplicationError('API URL must include a hostname.');
+	}
+	if (parsed.username || parsed.password) {
+		throw new ApplicationError('API URL must not include embedded credentials.');
+	}
+	if (parsed.pathname && parsed.pathname !== '/') {
+		throw new ApplicationError('API URL must be a base origin without a path.');
+	}
+	if (parsed.search || parsed.hash) {
+		throw new ApplicationError('API URL must not include query strings or fragments.');
+	}
+
+	return `${parsed.protocol}//${parsed.host}`;
+}
 
 function parseScopes(value: string): string[] {
 	return Array.from(
@@ -75,46 +105,46 @@ function userIdFromEmail(email: string, pepper: string): string {
 	return `email_hmac:v1:${digest}`;
 }
 
-function bundleOptionsCacheKey(apiUrl: string, apiKey: string): string {
+function policyOptionsCacheKey(apiUrl: string, apiKey: string): string {
 	const keyHash = createHash('sha256').update(apiKey).digest('base64url').slice(0, 32);
 	return `${apiUrl}:${keyHash}`;
 }
 
-function getCachedBundleOptions(cacheKey: string): INodePropertyOptions[] | null {
-	const cached = bundleOptionsCache.get(cacheKey);
+function getCachedPolicyOptions(cacheKey: string): INodePropertyOptions[] | null {
+	const cached = policyOptionsCache.get(cacheKey);
 	if (!cached) return null;
 	if (cached.expiresAt <= Date.now()) {
-		bundleOptionsCache.delete(cacheKey);
+		policyOptionsCache.delete(cacheKey);
 		return null;
 	}
 	return cached.options;
 }
 
-function setCachedBundleOptions(cacheKey: string, options: INodePropertyOptions[]): void {
-	if (bundleOptionsCache.size >= BUNDLE_OPTIONS_CACHE_MAX_ENTRIES) {
-		const oldestKey = bundleOptionsCache.keys().next().value;
-		if (oldestKey) bundleOptionsCache.delete(oldestKey);
+function setCachedPolicyOptions(cacheKey: string, options: INodePropertyOptions[]): void {
+	if (policyOptionsCache.size >= POLICY_OPTIONS_CACHE_MAX_ENTRIES) {
+		const oldestKey = policyOptionsCache.keys().next().value;
+		if (oldestKey) policyOptionsCache.delete(oldestKey);
 	}
-	bundleOptionsCache.set(cacheKey, {
-		expiresAt: Date.now() + BUNDLE_OPTIONS_CACHE_TTL_MS,
+	policyOptionsCache.set(cacheKey, {
+		expiresAt: Date.now() + POLICY_OPTIONS_CACHE_TTL_MS,
 		options,
 	});
 }
 
-function bundleOptionDescription(bundle: AllowlyAgentScopeBundle): string {
+function policyOptionDescription(policy: AllowlyAgentPolicy): string {
 	const parts: string[] = [];
-	const scopes = Array.isArray(bundle.scopes) ? bundle.scopes : [];
-	const scopeNames = scopes
-		.map((scope) => scope.name)
+	const actions = Array.isArray(policy.actions) ? policy.actions : [];
+	const actionNames = actions
+		.map((action) => action.name)
 		.filter((name): name is string => Boolean(name));
 
-	if (bundle.description) parts.push(bundle.description);
-	if (scopeNames.length > 0) {
-		parts.push(`${scopeNames.length} scope${scopeNames.length === 1 ? '' : 's'}: ${scopeNames.slice(0, 4).join(', ')}`);
+	if (policy.description) parts.push(policy.description);
+	if (actionNames.length > 0) {
+		parts.push(`${actionNames.length} action${actionNames.length === 1 ? '' : 's'}: ${actionNames.slice(0, 4).join(', ')}`);
 	}
-	if (bundle.requires_confirm_for?.length) parts.push(`confirm: ${bundle.requires_confirm_for.join(', ')}`);
-	if (bundle.requires_escalation_for?.length) parts.push(`escalate: ${bundle.requires_escalation_for.join(', ')}`);
-	if (bundle.default_expiry_days) parts.push(`expires in ${bundle.default_expiry_days}d`);
+	if (policy.requires_confirm_for?.length) parts.push(`confirm: ${policy.requires_confirm_for.join(', ')}`);
+	if (policy.requires_escalation_for?.length) parts.push(`escalate: ${policy.requires_escalation_for.join(', ')}`);
+	if (policy.default_expiry_days) parts.push(`expires in ${policy.default_expiry_days}d`);
 
 	return parts.join(' · ');
 }
@@ -192,7 +222,7 @@ export class Allowly implements INodeType {
 					{
 						name: 'Create Authorization',
 						value: 'createAuthorization',
-						description: 'Create an authorization from a user ID and agent scope bundle',
+						description: 'Create an authorization from a user ID and agent policy',
 						action: 'Create an authorization',
 					},
 					{
@@ -205,16 +235,16 @@ export class Allowly implements INodeType {
 				default: 'check',
 			},
 			{
-				displayName: 'Bundle Name or ID',
-				name: 'bundleId',
+				displayName: 'Policy Name or ID',
+				name: 'policyId',
 				type: 'options',
 				default: '',
 				options: [],
 				typeOptions: {
-					loadOptionsMethod: 'getAgentScopeBundles',
+					loadOptionsMethod: 'getAgentPolicies',
 				},
 				required: true,
-				description: 'Allowly agent scope bundle ID to authorize for this user. Loaded from the selected API credential workspace. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+				description: 'Allowly agent policy to authorize for this user. Loaded from the selected API credential workspace. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 				displayOptions: {
 					show: {
 						operation: ['createAuthorization'],
@@ -293,8 +323,8 @@ export class Allowly implements INodeType {
 				},
 			},
 			{
-				displayName: 'Authorization ID',
-				name: 'authorizationId',
+				displayName: 'Authorization',
+				name: 'authorization',
 				type: 'string',
 				default: '',
 				required: true,
@@ -307,12 +337,12 @@ export class Allowly implements INodeType {
 				},
 			},
 			{
-				displayName: 'Scope(s)',
+				displayName: 'Action(s)',
 				name: 'scopes',
 				type: 'string',
 				default: '',
 				required: true,
-				description: 'One scope, or multiple scopes separated by commas or new lines',
+				description: 'One action name, or multiple action names separated by commas or new lines',
 				placeholder: 'email.send',
 				displayOptions: {
 					show: {
@@ -333,8 +363,8 @@ export class Allowly implements INodeType {
 				},
 			},
 			{
-				displayName: 'Session ID',
-				name: 'sessionId',
+				displayName: 'Session',
+				name: 'session',
 				type: 'string',
 				default: '',
 				description: 'Optional workflow or agent-session identifier copied into the signed receipt',
@@ -358,12 +388,12 @@ export class Allowly implements INodeType {
 				},
 			},
 			{
-				displayName: 'Workflow User ID',
-				name: 'workflowUserId',
+				displayName: 'Workflow User',
+				name: 'workflowUser',
 				type: 'string',
 				default: '',
 				description:
-					'Optional n8n workflow context value. Authorization is still determined by Authorization ID.',
+					'Optional n8n workflow context value. Authorization is still determined by Authorization.',
 				displayOptions: {
 					show: {
 						operation: ['check'],
@@ -371,12 +401,12 @@ export class Allowly implements INodeType {
 				},
 			},
 			{
-				displayName: 'Workflow Agent ID',
-				name: 'workflowAgentId',
+				displayName: 'Workflow Agent',
+				name: 'workflowAgent',
 				type: 'string',
 				default: '',
 				description:
-					'Optional n8n workflow context value. Authorization is still determined by Authorization ID.',
+					'Optional n8n workflow context value. Authorization is still determined by Authorization.',
 				displayOptions: {
 					show: {
 						operation: ['check'],
@@ -401,17 +431,17 @@ export class Allowly implements INodeType {
 
 	methods = {
 		loadOptions: {
-			async getAgentScopeBundles(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+			async getAgentPolicies(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
 				const credentials = await this.getCredentials('allowlyApi');
 				const apiKey = String(credentials.apiKey ?? '');
-				const apiUrl = String(credentials.apiUrl ?? 'https://api.allowly.ai').replace(/\/+$/, '');
-				const cacheKey = bundleOptionsCacheKey(apiUrl, apiKey);
-				const cachedOptions = getCachedBundleOptions(cacheKey);
+				const apiUrl = normalizeApiUrl(credentials.apiUrl);
+				const cacheKey = policyOptionsCacheKey(apiUrl, apiKey);
+				const cachedOptions = getCachedPolicyOptions(cacheKey);
 				if (cachedOptions) return cachedOptions;
 
 				const options: IHttpRequestOptions = {
 					method: 'GET',
-					url: `${apiUrl}/v1/agent-scope-bundles?limit=100`,
+					url: `${apiUrl}/v1/policies?limit=100`,
 					json: true,
 				};
 
@@ -420,35 +450,35 @@ export class Allowly implements INodeType {
 						this,
 						'allowlyApi',
 						options,
-					)) as AllowlyAgentScopeBundleListResponse;
-					const bundles = response.items ?? [];
-					const bundleOptions: INodePropertyOptions[] = [];
+					)) as AllowlyAgentPolicyListResponse;
+					const policies = response.items ?? [];
+					const policyOptions: INodePropertyOptions[] = [];
 
-					for (const bundle of bundles) {
-						const id = String(bundle.id ?? bundle.bundle_id ?? '').trim();
+					for (const policy of policies) {
+						const id = String(policy.policy_id ?? '').trim();
 						if (!id) continue;
-						const agentId = String(bundle.agent_id ?? '').trim();
+						const agentId = String(policy.agent_id ?? '').trim();
 
-						bundleOptions.push({
+						policyOptions.push({
 							name: agentId ? `${id} (${agentId})` : id,
 							value: id,
-							description: bundleOptionDescription(bundle),
+							description: policyOptionDescription(policy),
 						});
 					}
 
-					setCachedBundleOptions(cacheKey, bundleOptions);
-					return bundleOptions;
+					setCachedPolicyOptions(cacheKey, policyOptions);
+					return policyOptions;
 				} catch (error) {
 					if (httpStatusCode(error) === 429) {
 						throw new NodeOperationError(
 							this.getNode(),
-							'Could not load Allowly agent scope bundles: rate limit reached. Wait a moment, then reload the Bundle ID options.',
+							'Could not load Allowly agent policies: rate limit reached. Wait a moment, then reload the Policy options.',
 						);
 					}
 
 					throw new NodeOperationError(
 						this.getNode(),
-						`Could not load Allowly agent scope bundles: ${(error as Error).message}. The selected credential must be able to call GET /v1/agent-scope-bundles.`,
+						`Could not load Allowly agent policies: ${(error as Error).message}. The selected credential must be able to call GET /v1/policies.`,
 					);
 				}
 			},
@@ -462,16 +492,16 @@ export class Allowly implements INodeType {
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex += 1) {
 			try {
 				const credentials = await this.getCredentials('allowlyApi', itemIndex);
-				const apiUrl = String(credentials.apiUrl ?? 'https://api.allowly.ai').replace(/\/+$/, '');
+				const apiUrl = normalizeApiUrl(credentials.apiUrl);
 				const operation = this.getNodeParameter('operation', itemIndex) as string;
 
 				if (operation === 'createAuthorization') {
-					const bundleId = (this.getNodeParameter('bundleId', itemIndex) as string).trim();
+					const policyId = (this.getNodeParameter('policyId', itemIndex) as string).trim();
 					const userIdentifierMode = this.getNodeParameter('userIdentifierMode', itemIndex) as string;
 					let userId: string;
 
-					if (!bundleId) {
-						throw new NodeOperationError(this.getNode(), 'Bundle ID is required.', { itemIndex });
+					if (!policyId) {
+						throw new NodeOperationError(this.getNode(), 'Policy is required.', { itemIndex });
 					}
 
 					if (userIdentifierMode === 'emailHmac') {
@@ -501,7 +531,7 @@ export class Allowly implements INodeType {
 						},
 						body: {
 							user_id: userId,
-							bundle_id: bundleId,
+							policy_id: policyId,
 						},
 						json: true,
 					};
@@ -515,7 +545,7 @@ export class Allowly implements INodeType {
 						json: {
 							authorizationId: response.authorization_id ?? response.authorizationId,
 							userId,
-							bundleId,
+							policyId,
 							receipt: response.receipt,
 							response,
 						} as IDataObject,
@@ -526,13 +556,13 @@ export class Allowly implements INodeType {
 					continue;
 				}
 
-				const authorizationId = this.getNodeParameter('authorizationId', itemIndex) as string;
+				const authorizationId = this.getNodeParameter('authorization', itemIndex) as string;
 				const scopes = parseScopes(this.getNodeParameter('scopes', itemIndex) as string);
 				const resource = this.getNodeParameter('resource', itemIndex) as string;
-				const sessionId = this.getNodeParameter('sessionId', itemIndex) as string;
+				const sessionId = this.getNodeParameter('session', itemIndex) as string;
 				const estimatedCostMicros = this.getNodeParameter('estimatedCostMicros', itemIndex) as number;
-				const workflowUserId = this.getNodeParameter('workflowUserId', itemIndex) as string;
-				const workflowAgentId = this.getNodeParameter('workflowAgentId', itemIndex) as string;
+				const workflowUserId = this.getNodeParameter('workflowUser', itemIndex) as string;
+				const workflowAgentId = this.getNodeParameter('workflowAgent', itemIndex) as string;
 				const context = parseContext(this.getNodeParameter('contextJson', itemIndex) as string, this, itemIndex);
 
 				if (scopes.length === 0) {

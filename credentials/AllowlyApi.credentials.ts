@@ -21,7 +21,7 @@ export class AllowlyApi implements ICredentialType {
 	test = {
 		request: {
 			method: 'GET' as const,
-			url: '={{$credentials.apiUrl.replace(/\\/+$/, "") + "/v1/agent-scope-bundles?limit=1"}}',
+			url: '={{$credentials.apiUrl.replace(/\\/+$/, "") + "/v1/policies?limit=1"}}',
 		},
 	};
 
@@ -43,7 +43,7 @@ export class AllowlyApi implements ICredentialType {
 			type: 'string',
 			default: 'https://api.allowly.ai',
 			required: true,
-			description: 'Allowly API base URL.',
+			description: 'Allowly API origin. Use only the origin, for example https://api.allowly.ai or http://localhost:8080.',
 		},
 	];
 }
