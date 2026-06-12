@@ -58,7 +58,7 @@ Authorization: Bearer allowly_l1_s001_...
 ```json
 {
   "authorization_id": "auth_...",
-  "scopes": ["email.send"],
+  "actions": ["email.send"],
   "resource": "gmail:thread:abc123",
   "context": {
     "workflow_user_id": "user_123",
@@ -138,13 +138,13 @@ More: [PII-safe identifiers](https://allowly.ai/docs/sdk/identifiers/).
 
 ### Check output
 
-The node outputs the first scope's convenient fields plus the full response:
+The node outputs the first action's convenient fields plus the full response:
 
 ```json
 {
-  "scope": "email.send",
+  "action": "email.send",
   "decision": "allow",
-  "reason": "authorization_granted_scope_active",
+  "reason": "authorization_granted_action_active",
   "receipt": {
     "status": "pending",
     "receipt_id": "rcp_..."
@@ -152,7 +152,7 @@ The node outputs the first scope's convenient fields plus the full response:
   "results": {
     "email.send": {
       "decision": "allow",
-      "reason": "authorization_granted_scope_active"
+      "reason": "authorization_granted_action_active"
     }
   },
   "response": {

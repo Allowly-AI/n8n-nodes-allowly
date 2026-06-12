@@ -13,7 +13,7 @@ import { ApplicationError, NodeOperationError } from 'n8n-workflow';
 
 type AllowlyCheckResponse = {
 	authorization_id?: string;
-	results?: Record<string, AllowlyScopeResult>;
+	results?: Record<string, AllowlyActionResult>;
 	[key: string]: unknown;
 };
 
@@ -24,7 +24,7 @@ type AllowlyAuthorizationResponse = {
 	[key: string]: unknown;
 };
 
-type AllowlyScopeResult = {
+type AllowlyActionResult = {
 	decision?: string;
 	reason?: string;
 	receipt?: unknown;
@@ -88,12 +88,12 @@ function normalizeApiUrl(value: unknown): string {
 	return `${parsed.protocol}//${parsed.host}`;
 }
 
-function parseScopes(value: string): string[] {
+function parseActions(value: string): string[] {
 	return Array.from(
 		new Set(
 			value
 				.split(/[\n,]/)
-				.map((scope) => scope.trim())
+				.map((action) => action.trim())
 				.filter(Boolean),
 		),
 	);
@@ -329,7 +329,7 @@ export class Allowly implements INodeType {
 				default: '',
 				required: true,
 				description:
-					'Stored Allowly authorization ID. The authorization already binds the user, agent, and scopes.',
+					'Stored Allowly authorization ID. The authorization already binds the user, agent, and actions.',
 				displayOptions: {
 					show: {
 						operation: ['check'],
@@ -338,7 +338,7 @@ export class Allowly implements INodeType {
 			},
 			{
 				displayName: 'Action(s)',
-				name: 'scopes',
+				name: 'actions',
 				type: 'string',
 				default: '',
 				required: true,
@@ -557,7 +557,7 @@ export class Allowly implements INodeType {
 				}
 
 				const authorizationId = this.getNodeParameter('authorization', itemIndex) as string;
-				const scopes = parseScopes(this.getNodeParameter('scopes', itemIndex) as string);
+				const actions = parseActions(this.getNodeParameter('actions', itemIndex) as string);
 				const resource = this.getNodeParameter('resource', itemIndex) as string;
 				const sessionId = this.getNodeParameter('session', itemIndex) as string;
 				const estimatedCostMicros = this.getNodeParameter('estimatedCostMicros', itemIndex) as number;
@@ -565,8 +565,8 @@ export class Allowly implements INodeType {
 				const workflowAgentId = this.getNodeParameter('workflowAgent', itemIndex) as string;
 				const context = parseContext(this.getNodeParameter('contextJson', itemIndex) as string, this, itemIndex);
 
-				if (scopes.length === 0) {
-					throw new NodeOperationError(this.getNode(), 'At least one scope is required.', { itemIndex });
+				if (actions.length === 0) {
+					throw new NodeOperationError(this.getNode(), 'At least one action is required.', { itemIndex });
 				}
 
 				if (workflowUserId.trim()) context.workflow_user_id = workflowUserId.trim();
@@ -574,7 +574,7 @@ export class Allowly implements INodeType {
 
 				const body: Record<string, unknown> = {
 					authorization_id: authorizationId,
-					scopes,
+					actions,
 				};
 				if (resource.trim()) body.resource = resource.trim();
 				if (sessionId.trim()) body.session_id = sessionId.trim();
@@ -596,12 +596,12 @@ export class Allowly implements INodeType {
 					'allowlyApi',
 					options,
 				)) as AllowlyCheckResponse;
-				const firstScope = scopes[0];
-				const firstResult = response.results?.[firstScope] ?? {};
+				const firstAction = actions[0];
+				const firstResult = response.results?.[firstAction] ?? {};
 
 				returnData.push({
 					json: {
-						scope: firstScope,
+						action: firstAction,
 						decision: firstResult.decision,
 						reason: firstResult.reason,
 						receipt: firstResult.receipt,
