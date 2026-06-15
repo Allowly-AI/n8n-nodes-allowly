@@ -1,4 +1,4 @@
-import { createHash, createHmac } from 'crypto';
+import { createHmac } from 'crypto';
 import type {
 	IDataObject,
 	IExecuteFunctions,
@@ -19,7 +19,6 @@ type AllowlyCheckResponse = {
 
 type AllowlyAuthorizationResponse = {
 	authorization_id?: string;
-	authorizationId?: string;
 	receipt?: unknown;
 	[key: string]: unknown;
 };
@@ -35,10 +34,6 @@ type AllowlyActionResult = {
 type AllowlyAgentPolicy = {
 	policy_id?: string;
 	agent_id?: string;
-	actions?: Array<{ name?: string }>;
-	requires_confirm_for?: string[];
-	requires_escalation_for?: string[];
-	default_expiry_days?: number | null;
 	description?: string | null;
 	[key: string]: unknown;
 };
@@ -48,14 +43,6 @@ type AllowlyAgentPolicyListResponse = {
 	[key: string]: unknown;
 };
 
-type CachedPolicyOptions = {
-	expiresAt: number;
-	options: INodePropertyOptions[];
-};
-
-const POLICY_OPTIONS_CACHE_TTL_MS = 60_000;
-const POLICY_OPTIONS_CACHE_MAX_ENTRIES = 100;
-const policyOptionsCache = new Map<string, CachedPolicyOptions>();
 const DEFAULT_API_URL = 'https://api.allowly.ai';
 
 function normalizeApiUrl(value: unknown): string {
@@ -105,71 +92,8 @@ function userIdFromEmail(email: string, pepper: string): string {
 	return `email_hmac:v1:${digest}`;
 }
 
-function policyOptionsCacheKey(apiUrl: string, apiKey: string): string {
-	const keyHash = createHash('sha256').update(apiKey).digest('base64url').slice(0, 32);
-	return `${apiUrl}:${keyHash}`;
-}
-
-function getCachedPolicyOptions(cacheKey: string): INodePropertyOptions[] | null {
-	const cached = policyOptionsCache.get(cacheKey);
-	if (!cached) return null;
-	if (cached.expiresAt <= Date.now()) {
-		policyOptionsCache.delete(cacheKey);
-		return null;
-	}
-	return cached.options;
-}
-
-function setCachedPolicyOptions(cacheKey: string, options: INodePropertyOptions[]): void {
-	if (policyOptionsCache.size >= POLICY_OPTIONS_CACHE_MAX_ENTRIES) {
-		const oldestKey = policyOptionsCache.keys().next().value;
-		if (oldestKey) policyOptionsCache.delete(oldestKey);
-	}
-	policyOptionsCache.set(cacheKey, {
-		expiresAt: Date.now() + POLICY_OPTIONS_CACHE_TTL_MS,
-		options,
-	});
-}
-
 function policyOptionDescription(policy: AllowlyAgentPolicy): string {
-	const parts: string[] = [];
-	const actions = Array.isArray(policy.actions) ? policy.actions : [];
-	const actionNames = actions
-		.map((action) => action.name)
-		.filter((name): name is string => Boolean(name));
-
-	if (policy.description) parts.push(policy.description);
-	if (actionNames.length > 0) {
-		parts.push(`${actionNames.length} action${actionNames.length === 1 ? '' : 's'}: ${actionNames.slice(0, 4).join(', ')}`);
-	}
-	if (policy.requires_confirm_for?.length) parts.push(`confirm: ${policy.requires_confirm_for.join(', ')}`);
-	if (policy.requires_escalation_for?.length) parts.push(`escalate: ${policy.requires_escalation_for.join(', ')}`);
-	if (policy.default_expiry_days) parts.push(`expires in ${policy.default_expiry_days}d`);
-
-	return parts.join(' · ');
-}
-
-function httpStatusCode(error: unknown): number | undefined {
-	if (!error || typeof error !== 'object') return undefined;
-
-	const err = error as {
-		status?: unknown;
-		statusCode?: unknown;
-		response?: {
-			status?: unknown;
-			statusCode?: unknown;
-		};
-	};
-	const candidates = [err.statusCode, err.status, err.response?.statusCode, err.response?.status];
-	for (const candidate of candidates) {
-		if (typeof candidate === 'number') return candidate;
-		if (typeof candidate === 'string') {
-			const parsed = Number(candidate);
-			if (Number.isInteger(parsed)) return parsed;
-		}
-	}
-
-	return undefined;
+	return policy.description ?? '';
 }
 
 function parseContext(value: string, executeFunctions: IExecuteFunctions, itemIndex: number): Record<string, unknown> {
@@ -433,11 +357,7 @@ export class Allowly implements INodeType {
 		loadOptions: {
 			async getAgentPolicies(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
 				const credentials = await this.getCredentials('allowlyApi');
-				const apiKey = String(credentials.apiKey ?? '');
 				const apiUrl = normalizeApiUrl(credentials.apiUrl);
-				const cacheKey = policyOptionsCacheKey(apiUrl, apiKey);
-				const cachedOptions = getCachedPolicyOptions(cacheKey);
-				if (cachedOptions) return cachedOptions;
 
 				const options: IHttpRequestOptions = {
 					method: 'GET',
@@ -466,16 +386,8 @@ export class Allowly implements INodeType {
 						});
 					}
 
-					setCachedPolicyOptions(cacheKey, policyOptions);
 					return policyOptions;
 				} catch (error) {
-					if (httpStatusCode(error) === 429) {
-						throw new NodeOperationError(
-							this.getNode(),
-							'Could not load Allowly agent policies: rate limit reached. Wait a moment, then reload the Policy options.',
-						);
-					}
-
 					throw new NodeOperationError(
 						this.getNode(),
 						`Could not load Allowly agent policies: ${(error as Error).message}. The selected credential must be able to call GET /v1/policies.`,
@@ -543,7 +455,7 @@ export class Allowly implements INodeType {
 					)) as AllowlyAuthorizationResponse;
 					returnData.push({
 						json: {
-							authorizationId: response.authorization_id ?? response.authorizationId,
+							authorizationId: response.authorization_id,
 							userId,
 							policyId,
 							receipt: response.receipt,

@@ -4,10 +4,6 @@ Community n8n node for Allowly.
 
 Use it to create an Allowly authorization from an agent policy, then check that authorization before an AI-agent, tool, or automation step runs. The node returns Allowly's decision object so your workflow can branch on `allow`, `deny`, `confirm`, or `escalate`.
 
-## Status
-
-Initial package scaffold. Publish to npm as `n8n-nodes-allowly` to make it installable from n8n Community Nodes.
-
 ## Install in n8n
 
 After publishing to npm:
@@ -42,7 +38,7 @@ Authorization: Bearer allowly_l1_s001_...
 
 The node output includes `authorizationId`. Store it in your workflow or app data, then use it with the **Check** operation.
 
-The **Policy Name or ID** field is loaded from the Allowly workspace attached to the selected credential. This calls `GET /v1/policies` so n8n users can choose a policy instead of copying IDs from the dashboard. The dropdown values come from each policy's `policy_id`. Policy options are cached in-process for 60 seconds per API URL and credential to avoid repeated dropdown reloads hitting the API.
+The **Policy Name or ID** field is loaded from the Allowly workspace attached to the selected credential. This calls `GET /v1/policies` so n8n users can choose a policy instead of copying IDs from the dashboard. The dropdown values come from each policy's `policy_id`.
 
 Docs: [Authorizations](https://allowly.ai/docs/api-reference/authorizations/) and [agent policies](https://allowly.ai/docs/api-reference/authorizations/#agent-policies).
 
@@ -78,7 +74,7 @@ Docs: [Check API](https://allowly.ai/docs/api-reference/check/) and [decisions a
 - **API Key**: Allowly API key used to call the API. Keep it server-side.
 - **API URL**: Allowly API origin. Use only the origin, for example `https://api.allowly.ai` or `http://localhost:8080`.
 
-For the smoothest setup, use a key that can both list agent policies and create authorizations. If policy prefetch fails, check that the credential can call `GET /v1/policies`. If prefetch hits a rate limit, wait briefly and reload the Policy options.
+For the smoothest setup, use a key that can both list agent policies and create authorizations. If policy prefetch fails, check that the credential can call `GET /v1/policies`.
 
 ### Create Authorization fields
 
