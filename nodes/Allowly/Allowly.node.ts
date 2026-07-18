@@ -450,7 +450,7 @@ export class Allowly implements INodeType {
 					continue;
 				}
 
-				const authorizationId = this.getNodeParameter('authorization', itemIndex) as string;
+				const authorizationId = (this.getNodeParameter('authorization', itemIndex) as string).trim();
 				const actions = parseActions(this.getNodeParameter('actions', itemIndex) as string);
 				const resource = this.getNodeParameter('resource', itemIndex) as string;
 				const sessionId = this.getNodeParameter('session', itemIndex) as string;
@@ -463,6 +463,9 @@ export class Allowly implements INodeType {
 				const workflowAgentId = this.getNodeParameter('workflowAgent', itemIndex) as string;
 				const context = parseContext(this.getNodeParameter('contextJson', itemIndex), this, itemIndex);
 
+				if (!authorizationId) {
+					throw new NodeOperationError(this.getNode(), 'Authorization is required.', { itemIndex });
+				}
 				if (actions.length === 0) {
 					throw new NodeOperationError(this.getNode(), 'At least one action is required.', { itemIndex });
 				}
