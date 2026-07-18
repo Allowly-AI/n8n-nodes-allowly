@@ -26,6 +26,7 @@
     "dev": "n8n-node dev",
     "lint": "n8n-node lint",
     "lint:fix": "n8n-node lint --fix",
+    "test": "npm run build --silent && node --test test/*.test.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepack": "npm run build",
     "release": "n8n-node release",

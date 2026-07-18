@@ -29,6 +29,8 @@ type AllowlyActionResult = {
 	[key: string]: unknown;
 };
 
+const DECISION_ORDER: Record<string, number> = { allow: 0, confirm: 1, escalate: 2, deny: 3 };
+
 const DEFAULT_API_URL = 'https://api.allowly.ai';
 
 function normalizeApiUrl(value: unknown): string {
@@ -76,6 +78,19 @@ function userIdFromEmail(email: string, pepper: string): string {
 	const normalized = email.trim().toLowerCase();
 	const digest = createHmac('sha256', pepper).update(normalized).digest('base64url');
 	return `email_hmac:v1:${digest}`;
+}
+
+export function mostRestrictiveResult(
+	results: Record<string, AllowlyActionResult>,
+	actions: string[],
+): { action: string; result: AllowlyActionResult } {
+	const action = actions.reduce((worst, candidate) =>
+		(DECISION_ORDER[results[candidate]?.decision ?? ''] ?? 4) >
+		(DECISION_ORDER[results[worst]?.decision ?? ''] ?? 4)
+			? candidate
+			: worst,
+	);
+	return { action, result: results[action] ?? {} };
 }
 
 function parseContext(value: string, executeFunctions: IExecuteFunctions, itemIndex: number): Record<string, unknown> {
@@ -442,16 +457,15 @@ export class Allowly implements INodeType {
 					'allowlyApi',
 					options,
 				)) as AllowlyCheckResponse;
-				const firstAction = actions[0];
-				const firstResult = response.results?.[firstAction] ?? {};
+				const { action, result } = mostRestrictiveResult(response.results ?? {}, actions);
 
 				returnData.push({
 					json: {
-						action: firstAction,
-						decision: firstResult.decision,
-						reason: firstResult.reason,
-						receipt: firstResult.receipt,
-						policyEval: firstResult.policy_eval ?? null,
+						action,
+						decision: result.decision,
+						reason: result.reason,
+						receipt: result.receipt,
+						policyEval: result.policy_eval ?? null,
 						results: response.results,
 						response,
 					} as IDataObject,

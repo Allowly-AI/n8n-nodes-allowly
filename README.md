@@ -134,7 +134,7 @@ More: [PII-safe identifiers](https://allowly.ai/docs/sdk/identifiers/).
 
 ### Check output
 
-The node outputs the first action's convenient fields plus the full response:
+The node outputs the most restrictive action's convenient fields plus the full response. The order is `deny`, `escalate`, `confirm`, then `allow`, so a multi-action check cannot hide a denied action behind an earlier allowed one.
 
 ```json
 {
