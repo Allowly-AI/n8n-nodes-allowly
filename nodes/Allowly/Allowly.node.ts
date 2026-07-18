@@ -1,4 +1,4 @@
-import { createHmac } from 'crypto';
+import { createHash, createHmac } from 'crypto';
 import type {
 	IDataObject,
 	IExecuteFunctions,
@@ -131,6 +131,13 @@ export function parseEstimatedCostMicros(
 		);
 	}
 	return Math.round(cost);
+}
+
+export function n8nIdempotencyKey(executionId: string, nodeName: string, itemIndex: number): string {
+	const digest = createHash('sha256')
+		.update(`${executionId}\0${nodeName}\0${itemIndex}`)
+		.digest('base64url');
+	return `n8n:${digest}`;
 }
 
 export class Allowly implements INodeType {
@@ -375,6 +382,11 @@ export class Allowly implements INodeType {
 				const credentials = await this.getCredentials('allowlyApi', itemIndex);
 				const apiUrl = normalizeApiUrl(credentials.apiUrl);
 				const operation = this.getNodeParameter('operation', itemIndex) as string;
+				const idempotencyKey = n8nIdempotencyKey(
+					this.getExecutionId(),
+					this.getNode().name,
+					itemIndex,
+				);
 
 				if (operation === 'createAuthorization') {
 					const policyId = (this.getNodeParameter('policyId', itemIndex) as string).trim();
@@ -409,6 +421,7 @@ export class Allowly implements INodeType {
 						url: `${apiUrl}/v1/authorizations`,
 						headers: {
 							'Content-Type': 'application/json',
+							'Idempotency-Key': idempotencyKey,
 						},
 						body: {
 							user_id: userId,
@@ -471,6 +484,7 @@ export class Allowly implements INodeType {
 					url: `${apiUrl}/v1/check`,
 					headers: {
 						'Content-Type': 'application/json',
+						'Idempotency-Key': idempotencyKey,
 					},
 					body,
 					json: true,
