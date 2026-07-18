@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { mostRestrictiveResult } = require('../dist/nodes/Allowly/Allowly.node.js');
+const { mostRestrictiveResult, parseContext } = require('../dist/nodes/Allowly/Allowly.node.js');
 
 test('multi-action output selects the most restrictive result', () => {
 	const selected = mostRestrictiveResult(
@@ -15,4 +15,9 @@ test('multi-action output selects the most restrictive result', () => {
 		action: 'payment.charge',
 		result: { decision: 'deny', reason: 'blocked' },
 	});
+});
+
+test('context accepts a native object from an expression', () => {
+	const context = { source: 'workflow' };
+	assert.equal(parseContext(context, null, 0), context);
 });

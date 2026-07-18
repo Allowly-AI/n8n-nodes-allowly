@@ -93,11 +93,15 @@ export function mostRestrictiveResult(
 	return { action, result: results[action] ?? {} };
 }
 
-function parseContext(value: string, executeFunctions: IExecuteFunctions, itemIndex: number): Record<string, unknown> {
-	if (!value.trim()) return {};
+export function parseContext(value: unknown, executeFunctions: IExecuteFunctions, itemIndex: number): Record<string, unknown> {
+	if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+		return value as Record<string, unknown>;
+	}
+	const raw = String(value ?? '').trim();
+	if (!raw) return {};
 
 	try {
-		const parsed: unknown = JSON.parse(value);
+		const parsed: unknown = JSON.parse(raw);
 		if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
 			throw new NodeOperationError(executeFunctions.getNode(), 'Context JSON must be an object', { itemIndex });
 		}
@@ -424,7 +428,7 @@ export class Allowly implements INodeType {
 				const estimatedCostMicros = this.getNodeParameter('estimatedCostMicros', itemIndex) as number;
 				const workflowUserId = this.getNodeParameter('workflowUser', itemIndex) as string;
 				const workflowAgentId = this.getNodeParameter('workflowAgent', itemIndex) as string;
-				const context = parseContext(this.getNodeParameter('contextJson', itemIndex) as string, this, itemIndex);
+				const context = parseContext(this.getNodeParameter('contextJson', itemIndex), this, itemIndex);
 
 				if (actions.length === 0) {
 					throw new NodeOperationError(this.getNode(), 'At least one action is required.', { itemIndex });
