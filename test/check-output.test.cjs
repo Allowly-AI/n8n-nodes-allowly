@@ -1,6 +1,10 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { mostRestrictiveResult, parseContext } = require('../dist/nodes/Allowly/Allowly.node.js');
+const {
+	mostRestrictiveResult,
+	parseContext,
+	parseEstimatedCostMicros,
+} = require('../dist/nodes/Allowly/Allowly.node.js');
 
 test('multi-action output selects the most restrictive result', () => {
 	const selected = mostRestrictiveResult(
@@ -20,4 +24,8 @@ test('multi-action output selects the most restrictive result', () => {
 test('context accepts a native object from an expression', () => {
 	const context = { source: 'workflow' };
 	assert.equal(parseContext(context, null, 0), context);
+});
+
+test('estimated cost removes floating-point dust', () => {
+	assert.equal(parseEstimatedCostMicros(2.01 * 1_000_000, null, 0), 2_010_000);
 });

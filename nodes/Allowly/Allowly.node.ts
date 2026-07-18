@@ -117,6 +117,22 @@ export function parseContext(value: unknown, executeFunctions: IExecuteFunctions
 	}
 }
 
+export function parseEstimatedCostMicros(
+	value: unknown,
+	executeFunctions: IExecuteFunctions,
+	itemIndex: number,
+): number {
+	const cost = Number(value);
+	if (!Number.isFinite(cost) || cost < 0) {
+		throw new NodeOperationError(
+			executeFunctions.getNode(),
+			'Estimated Cost Micros must be a non-negative number.',
+			{ itemIndex },
+		);
+	}
+	return Math.round(cost);
+}
+
 export class Allowly implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'Allowly',
@@ -425,7 +441,11 @@ export class Allowly implements INodeType {
 				const actions = parseActions(this.getNodeParameter('actions', itemIndex) as string);
 				const resource = this.getNodeParameter('resource', itemIndex) as string;
 				const sessionId = this.getNodeParameter('session', itemIndex) as string;
-				const estimatedCostMicros = this.getNodeParameter('estimatedCostMicros', itemIndex) as number;
+				const estimatedCostMicros = parseEstimatedCostMicros(
+					this.getNodeParameter('estimatedCostMicros', itemIndex),
+					this,
+					itemIndex,
+				);
 				const workflowUserId = this.getNodeParameter('workflowUser', itemIndex) as string;
 				const workflowAgentId = this.getNodeParameter('workflowAgent', itemIndex) as string;
 				const context = parseContext(this.getNodeParameter('contextJson', itemIndex), this, itemIndex);
