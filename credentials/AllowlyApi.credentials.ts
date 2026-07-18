@@ -43,7 +43,7 @@ export class AllowlyApi implements ICredentialType {
 			type: 'string',
 			default: 'https://api.allowly.ai',
 			required: true,
-			description: 'Allowly API origin. Use only the origin, for example https://api.allowly.ai or http://localhost:8080.',
+			description: 'Allowly API origin. Use only https://api.allowly.ai.',
 		},
 	];
 }

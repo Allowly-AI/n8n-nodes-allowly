@@ -72,7 +72,7 @@ Docs: [Check API](https://allowly.ai/docs/api-reference/check/) and [decisions a
 ### Credential fields
 
 - **API Key**: Allowly API key used to call the API. Keep it server-side.
-- **API URL**: Allowly API origin. Use only the origin, for example `https://api.allowly.ai` or `http://localhost:8080`.
+- **API URL**: Allowly API origin. Use only `https://api.allowly.ai`.
 
 Use an Allowly runtime key. Credential validation calls the runtime-scoped `GET /v1/authorizations` endpoint.
 
