@@ -501,7 +501,7 @@ export class Allowly implements INodeType {
 				if (this.continueOnFail()) {
 					returnData.push({
 						json: {
-							error: (error as Error).message,
+							error: (error as { description?: string }).description || (error as Error).message,
 						},
 						pairedItem: {
 							item: itemIndex,
