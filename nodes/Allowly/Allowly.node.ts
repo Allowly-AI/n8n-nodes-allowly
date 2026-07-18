@@ -3,9 +3,7 @@ import type {
 	IDataObject,
 	IExecuteFunctions,
 	IHttpRequestOptions,
-	ILoadOptionsFunctions,
 	INodeExecutionData,
-	INodePropertyOptions,
 	INodeType,
 	INodeTypeDescription,
 } from 'n8n-workflow';
@@ -28,18 +26,6 @@ type AllowlyActionResult = {
 	reason?: string;
 	receipt?: unknown;
 	policy_eval?: Record<string, unknown> | null;
-	[key: string]: unknown;
-};
-
-type AllowlyAgentPolicy = {
-	policy_id?: string;
-	agent_id?: string;
-	description?: string | null;
-	[key: string]: unknown;
-};
-
-type AllowlyAgentPolicyListResponse = {
-	items?: AllowlyAgentPolicy[];
 	[key: string]: unknown;
 };
 
@@ -90,10 +76,6 @@ function userIdFromEmail(email: string, pepper: string): string {
 	const normalized = email.trim().toLowerCase();
 	const digest = createHmac('sha256', pepper).update(normalized).digest('base64url');
 	return `email_hmac:v1:${digest}`;
-}
-
-function policyOptionDescription(policy: AllowlyAgentPolicy): string {
-	return policy.description ?? '';
 }
 
 function parseContext(value: string, executeFunctions: IExecuteFunctions, itemIndex: number): Record<string, unknown> {
@@ -159,16 +141,12 @@ export class Allowly implements INodeType {
 				default: 'check',
 			},
 			{
-				displayName: 'Policy Name or ID',
+				displayName: 'Policy ID',
 				name: 'policyId',
-				type: 'options',
+				type: 'string',
 				default: '',
-				options: [],
-				typeOptions: {
-					loadOptionsMethod: 'getAgentPolicies',
-				},
 				required: true,
-				description: 'Allowly agent policy to authorize for this user. Loaded from the selected API credential workspace. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+				description: 'Allowly agent policy ID to authorize for this user',
 				displayOptions: {
 					show: {
 						operation: ['createAuthorization'],
@@ -351,50 +329,6 @@ export class Allowly implements INodeType {
 			},
 		],
 		usableAsTool: true,
-	};
-
-	methods = {
-		loadOptions: {
-			async getAgentPolicies(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
-				const credentials = await this.getCredentials('allowlyApi');
-				const apiUrl = normalizeApiUrl(credentials.apiUrl);
-
-				const options: IHttpRequestOptions = {
-					method: 'GET',
-					url: `${apiUrl}/v1/policies?limit=100`,
-					json: true,
-				};
-
-				try {
-					const response = (await this.helpers.httpRequestWithAuthentication.call(
-						this,
-						'allowlyApi',
-						options,
-					)) as AllowlyAgentPolicyListResponse;
-					const policies = response.items ?? [];
-					const policyOptions: INodePropertyOptions[] = [];
-
-					for (const policy of policies) {
-						const id = String(policy.policy_id ?? '').trim();
-						if (!id) continue;
-						const agentId = String(policy.agent_id ?? '').trim();
-
-						policyOptions.push({
-							name: agentId ? `${id} (${agentId})` : id,
-							value: id,
-							description: policyOptionDescription(policy),
-						});
-					}
-
-					return policyOptions;
-				} catch (error) {
-					throw new NodeOperationError(
-						this.getNode(),
-						`Could not load Allowly agent policies: ${(error as Error).message}. The selected credential must be able to call GET /v1/policies.`,
-					);
-				}
-			},
-		},
 	};
 
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {

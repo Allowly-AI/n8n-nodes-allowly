@@ -21,7 +21,7 @@ export class AllowlyApi implements ICredentialType {
 	test = {
 		request: {
 			method: 'GET' as const,
-			url: '={{$credentials.apiUrl.replace(/\\/+$/, "") + "/v1/policies?limit=1"}}',
+			url: '={{$credentials.apiUrl.replace(/\\/+$/, "") + "/v1/authorizations?limit=1"}}',
 		},
 	};
 

@@ -38,7 +38,7 @@ Authorization: Bearer allowly_l1_s001_...
 
 The node output includes `authorizationId`. Store it in your workflow or app data, then use it with the **Check** operation.
 
-The **Policy Name or ID** field is loaded from the Allowly workspace attached to the selected credential. This calls `GET /v1/policies` so n8n users can choose a policy instead of copying IDs from the dashboard. The dropdown values come from each policy's `policy_id`.
+Copy the policy ID from the Allowly dashboard into **Policy ID**.
 
 Docs: [Authorizations](https://allowly.ai/docs/api-reference/authorizations/) and [agent policies](https://allowly.ai/docs/api-reference/authorizations/#agent-policies).
 
@@ -74,11 +74,11 @@ Docs: [Check API](https://allowly.ai/docs/api-reference/check/) and [decisions a
 - **API Key**: Allowly API key used to call the API. Keep it server-side.
 - **API URL**: Allowly API origin. Use only the origin, for example `https://api.allowly.ai` or `http://localhost:8080`.
 
-For the smoothest setup, use a key that can both list agent policies and create authorizations. If policy prefetch fails, check that the credential can call `GET /v1/policies`.
+Use an Allowly runtime key. Credential validation calls the runtime-scoped `GET /v1/authorizations` endpoint.
 
 ### Create Authorization fields
 
-- **Policy Name or ID**: reusable agent policy from Allowly. The dropdown is prefetched from the credential's workspace and stores the returned `policy_id`. The policy defines the agent and the actions the user is authorizing.
+- **Policy ID**: reusable agent policy ID copied from the Allowly dashboard. The policy defines the agent and the actions the user is authorizing.
 - **User Identifier**: choose how this node produces `user_id`.
 - **User ID**: opaque internal app user ID sent directly as `user_id`.
 - **User Email**: email to mask locally when **User Identifier** is set to **Mask Email Locally**.
