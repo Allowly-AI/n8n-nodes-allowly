@@ -21,6 +21,8 @@ type AllowlyAuthorizationResponse = {
 	[key: string]: unknown;
 };
 
+type AllowlySettlementResponse = Record<string, unknown>;
+
 type AllowlyActionResult = {
 	decision?: string;
 	reason?: string;
@@ -148,7 +150,7 @@ export class Allowly implements INodeType {
 		group: ['transform'],
 		version: 1,
 		subtitle: '={{$parameter["operation"]}}',
-		description: 'Create Allowly authorizations and check whether they permit AI-agent or tool actions.',
+		description: 'Create authorizations, check actions, and settle budget estimates with Allowly.',
 		defaults: {
 			name: 'Allowly',
 		},
@@ -178,6 +180,12 @@ export class Allowly implements INodeType {
 						value: 'check',
 						description: 'Call /v1/check before a tool or agent action runs',
 						action: 'Check an authorization',
+					},
+					{
+						name: 'Settle Budget',
+						value: 'settleBudget',
+						description: 'Report the actual cost of a budgeted check',
+						action: 'Settle a budget estimate',
 					},
 				],
 				default: 'check',
@@ -324,7 +332,7 @@ export class Allowly implements INodeType {
 				type: 'number',
 				default: 0,
 				description:
-					'Optional estimated action cost in micro-USD for budgeted authorizations. Set to 0 to omit.',
+					'Optional estimated action cost in micro-USD for budgeted authorizations. Set to 0 to omit. Reserved amounts stay charged until a Settle Budget step reports the actual cost.',
 				displayOptions: {
 					show: {
 						operation: ['check'],
@@ -366,6 +374,45 @@ export class Allowly implements INodeType {
 				displayOptions: {
 					show: {
 						operation: ['check'],
+					},
+				},
+			},
+			{
+				displayName: 'Check Receipt ID',
+				name: 'checkReceiptId',
+				type: 'string',
+				default: '',
+				required: true,
+				description:
+					'Map the receipt_id from the budgeted action in the Check step output. Settle in the same workflow run while the receipt still exists.',
+				displayOptions: {
+					show: {
+						operation: ['settleBudget'],
+					},
+				},
+			},
+			{
+				displayName: 'Actual Cost (Micro-USD)',
+				name: 'actualCostMicros',
+				type: 'number',
+				default: 0,
+				required: true,
+				description: 'Actual non-negative integer cost. Settlement requires a Check with an estimated cost.',
+				displayOptions: {
+					show: {
+						operation: ['settleBudget'],
+					},
+				},
+			},
+			{
+				displayName: 'Idempotency Key',
+				name: 'settlementIdempotencyKey',
+				type: 'string',
+				default: '',
+				description: 'Optional replay key. Defaults to the n8n execution ID.',
+				displayOptions: {
+					show: {
+						operation: ['settleBudget'],
 					},
 				},
 			},
@@ -447,6 +494,46 @@ export class Allowly implements INodeType {
 							item: itemIndex,
 						},
 					});
+					continue;
+				}
+
+				if (operation === 'settleBudget') {
+					const checkReceiptId = (this.getNodeParameter('checkReceiptId', itemIndex) as string).trim();
+					const actualCostMicros = Number(this.getNodeParameter('actualCostMicros', itemIndex));
+					const settlementIdempotencyKey = (
+						this.getNodeParameter('settlementIdempotencyKey', itemIndex) as string
+					).trim() || this.getExecutionId();
+
+					if (!checkReceiptId) {
+						throw new NodeOperationError(this.getNode(), 'Check Receipt ID is required.', { itemIndex });
+					}
+					if (!Number.isInteger(actualCostMicros) || actualCostMicros < 0) {
+						throw new NodeOperationError(
+							this.getNode(),
+							'Actual Cost (micro-USD) must be a non-negative integer.',
+							{ itemIndex },
+						);
+					}
+
+					const response = (await this.helpers.httpRequestWithAuthentication.call(
+						this,
+						'allowlyApi',
+						{
+							method: 'POST',
+							url: `${apiUrl}/v1/budget-settlements`,
+							headers: {
+								'Content-Type': 'application/json',
+								'Idempotency-Key': settlementIdempotencyKey,
+							},
+							body: {
+								check_receipt_id: checkReceiptId,
+								actual_cost_micros: actualCostMicros,
+							},
+							json: true,
+						},
+					)) as AllowlySettlementResponse;
+
+					returnData.push({ json: response as IDataObject, pairedItem: { item: itemIndex } });
 					continue;
 				}
 

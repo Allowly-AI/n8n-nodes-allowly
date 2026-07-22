@@ -2,7 +2,7 @@
 
 Community n8n node for Allowly.
 
-Use it to create an Allowly authorization from an agent policy, then check that authorization before an AI-agent, tool, or automation step runs. The node returns Allowly's decision object so your workflow can branch on `allow`, `deny`, `confirm`, or `escalate`.
+Use it to create an Allowly authorization from an agent policy, check that authorization before an AI-agent, tool, or automation step runs, and settle budget estimates after the action finishes. The node returns Allowly responses without interpreting receipts.
 
 ## Install in n8n
 
@@ -67,6 +67,10 @@ Allowly authorizes from `authorization_id`. The user, agent, allowed actions, ex
 
 Docs: [Check API](https://allowly.ai/docs/api-reference/check/) and [decisions and attributes](https://allowly.ai/docs/api-reference/decisions-and-attributes/).
 
+### Settle Budget
+
+Reports the actual cost of a budgeted check. Map **Check Receipt ID** from the budgeted action's `receipt.receipt_id`; for a multi-action check, use that action's receipt. Run settlement in the same workflow while the check receipt still exists.
+
 ## Fields
 
 ### Credential fields
@@ -90,10 +94,16 @@ Use an Allowly runtime key. Credential validation calls the runtime-scoped `GET 
 - **Action(s)**: one action name or comma/newline-separated action names to check.
 - **Resource**: optional action target, for example `gmail:thread:abc123`.
 - **Session**: optional workflow/session label copied into the signed receipt.
-- **Estimated Cost Micros**: optional micro-USD estimate for budgeted authorizations. `50_000_000` means `$50.00`.
+- **Estimated Cost Micros**: optional micro-USD estimate for budgeted authorizations. `50_000_000` means `$50.00`. Reserved amounts stay charged until a **Settle Budget** step reports the actual cost.
 - **Workflow User**: optional n8n workflow context field for traceability.
 - **Workflow Agent**: optional n8n workflow context field for traceability.
 - **Additional Context JSON**: optional JSON object copied into the Allowly check context and receipt.
+
+### Settle Budget fields
+
+- **Check Receipt ID**: `receipt.receipt_id` from the budgeted action in the **Check** output.
+- **Actual Cost (micro-USD)**: actual non-negative integer cost. The check must include an estimate.
+- **Idempotency Key**: optional replay key; defaults to the n8n execution ID.
 
 ## Why not use an email as `user_id`?
 
