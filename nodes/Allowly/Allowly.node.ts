@@ -407,7 +407,7 @@ export class Allowly implements INodeType {
 				name: 'settlementIdempotencyKey',
 				type: 'string',
 				default: '',
-				description: 'Optional replay key. Defaults to the n8n execution ID.',
+				description: 'Optional replay key. Defaults to the n8n execution ID plus check receipt ID.',
 				displayOptions: {
 					show: {
 						operation: ['settleBudget'],
@@ -500,7 +500,7 @@ export class Allowly implements INodeType {
 					const actualCostMicros = Number(this.getNodeParameter('actualCostMicros', itemIndex));
 					const settlementIdempotencyKey = (
 						this.getNodeParameter('settlementIdempotencyKey', itemIndex) as string
-					).trim() || this.getExecutionId();
+					).trim() || `${this.getExecutionId()}:${checkReceiptId}`;
 
 					if (!checkReceiptId) {
 						throw new NodeOperationError(this.getNode(), 'Check Receipt ID is required.', { itemIndex });

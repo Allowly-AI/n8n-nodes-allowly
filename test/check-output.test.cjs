@@ -8,23 +8,25 @@ const {
 	parseEstimatedCostMicros,
 } = require('../dist/nodes/Allowly/Allowly.node.js');
 
-function settlementContext(response) {
+function settlementContext(response, checkReceiptIds = ['rcp_check_123']) {
 	const parameters = {
 		operation: 'settleBudget',
-		checkReceiptId: 'rcp_check_123',
 		actualCostMicros: 25,
 		settlementIdempotencyKey: '',
 	};
+	const requests = [];
 	return {
-		getInputData: () => [{ json: {} }],
+		requests,
+		getInputData: () => checkReceiptIds.map(() => ({ json: {} })),
 		getCredentials: async () => ({ apiUrl: 'https://api.allowly.ai' }),
-		getNodeParameter: (name) => parameters[name],
+		getNodeParameter: (name, itemIndex) =>
+			name === 'checkReceiptId' ? checkReceiptIds[itemIndex] : parameters[name],
 		getExecutionId: () => 'execution-42',
 		getNode: () => ({ name: 'Settle Budget' }),
 		continueOnFail: () => false,
 		helpers: {
 			httpRequestWithAuthentication: async (_credentials, options) => {
-				settlementContext.request = options;
+				requests.push(options);
 				if (response instanceof Error) throw response;
 				return response;
 			},
@@ -75,14 +77,18 @@ test('budget settlement passes through the response and defaults the idempotency
 		receipt: { receipt_id: 'rcp_settlement_123', status: 'pending' },
 	};
 
-	const output = await new Allowly().execute.call(settlementContext(response));
+	const context = settlementContext(response, ['rcp_check_123', 'rcp_check_456']);
+	const output = await new Allowly().execute.call(context);
 
 	assert.deepEqual(output[0][0].json, response);
-	assert.deepEqual(settlementContext.request.body, {
+	assert.deepEqual(context.requests[0].body, {
 		check_receipt_id: 'rcp_check_123',
 		actual_cost_micros: 25,
 	});
-	assert.equal(settlementContext.request.headers['Idempotency-Key'], 'execution-42');
+	assert.deepEqual(
+		context.requests.map((request) => request.headers['Idempotency-Key']),
+		['execution-42:rcp_check_123', 'execution-42:rcp_check_456'],
+	);
 });
 
 for (const code of [

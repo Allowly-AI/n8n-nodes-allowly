@@ -103,7 +103,7 @@ Use an Allowly runtime key. Credential validation calls the runtime-scoped `GET 
 
 - **Check Receipt ID**: `receipt.receipt_id` from the budgeted action in the **Check** output.
 - **Actual Cost (micro-USD)**: actual non-negative integer cost. The check must include an estimate.
-- **Idempotency Key**: optional replay key; defaults to the n8n execution ID.
+- **Idempotency Key**: optional replay key; defaults to the n8n execution ID plus the check receipt ID.
 
 ## Why not use an email as `user_id`?
 
