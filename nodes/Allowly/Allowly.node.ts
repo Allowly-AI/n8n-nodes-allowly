@@ -21,8 +21,6 @@ type AllowlyAuthorizationResponse = {
 	[key: string]: unknown;
 };
 
-type AllowlySettlementResponse = Record<string, unknown>;
-
 type AllowlyActionResult = {
 	decision?: string;
 	reason?: string;
@@ -531,7 +529,7 @@ export class Allowly implements INodeType {
 							},
 							json: true,
 						},
-					)) as AllowlySettlementResponse;
+					)) as Record<string, unknown>;
 
 					returnData.push({ json: response as IDataObject, pairedItem: { item: itemIndex } });
 					continue;
