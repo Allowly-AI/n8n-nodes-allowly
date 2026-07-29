@@ -121,12 +121,17 @@ export function parseEstimatedCostMicros(
 	value: unknown,
 	executeFunctions: IExecuteFunctions,
 	itemIndex: number,
-): number {
+): number | null {
+	// Absent input and the -1 UI default both mean "no estimate". An explicit 0
+	// is a real value and must be serialized — the API treats it as a
+	// deliberate zero-cost reservation, not an omission.
+	if (value === undefined || value === null || value === '') return null;
 	const cost = Number(value);
+	if (cost === -1) return null;
 	if (!Number.isFinite(cost) || cost < 0) {
 		throw new NodeOperationError(
 			executeFunctions.getNode(),
-			'Estimated Cost Micros must be a non-negative number.',
+			'Estimated Cost Micros must be a non-negative number (or -1 to omit).',
 			{ itemIndex },
 		);
 	}
@@ -328,9 +333,9 @@ export class Allowly implements INodeType {
 				displayName: 'Estimated Cost Micros',
 				name: 'estimatedCostMicros',
 				type: 'number',
-				default: 0,
+				default: -1,
 				description:
-					'Optional estimated action cost in micro-USD for budgeted authorizations. Set to 0 to omit. Reserved amounts stay charged until a Settle Budget step reports the actual cost.',
+					'Optional estimated action cost in micro-USD for budgeted authorizations. Leave at -1 to omit; 0 is sent as an explicit zero-cost estimate. Reserved amounts stay charged until a Settle Budget step reports the actual cost.',
 				displayOptions: {
 					show: {
 						operation: ['check'],
@@ -564,7 +569,7 @@ export class Allowly implements INodeType {
 				};
 				if (resource.trim()) body.resource = resource.trim();
 				if (sessionId.trim()) body.session_id = sessionId.trim();
-				if (estimatedCostMicros > 0) body.estimated_cost_micros = estimatedCostMicros;
+				if (estimatedCostMicros !== null) body.estimated_cost_micros = estimatedCostMicros;
 				if (Object.keys(context).length > 0) body.context = context;
 
 				const options: IHttpRequestOptions = {

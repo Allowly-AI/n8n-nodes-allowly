@@ -58,6 +58,71 @@ test('estimated cost removes floating-point dust', () => {
 	assert.equal(parseEstimatedCostMicros(2.01 * 1_000_000, null, 0), 2_010_000);
 });
 
+test('explicit zero estimate is preserved; -1 and absent are omitted', () => {
+	assert.equal(parseEstimatedCostMicros(0, null, 0), 0);
+	assert.equal(parseEstimatedCostMicros(-1, null, 0), null);
+	assert.equal(parseEstimatedCostMicros('', null, 0), null);
+	assert.equal(parseEstimatedCostMicros(undefined, null, 0), null);
+});
+
+function checkContext(parameters, response) {
+	const requests = [];
+	return {
+		requests,
+		getInputData: () => [{ json: {} }],
+		getCredentials: async () => ({ apiUrl: 'https://api.allowly.ai' }),
+		getNodeParameter: (name) => parameters[name],
+		getExecutionId: () => 'execution-42',
+		getNode: () => ({ name: 'Allowly' }),
+		continueOnFail: () => false,
+		helpers: {
+			httpRequestWithAuthentication: async (_credentials, options) => {
+				requests.push(options);
+				return response;
+			},
+		},
+	};
+}
+
+test('check serializes an explicit zero-cost estimate', async () => {
+	const context = checkContext(
+		{
+			operation: 'check',
+			authorization: 'auth_123',
+			actions: 'llm.enrich',
+			resource: '',
+			session: '',
+			estimatedCostMicros: 0,
+			workflowUser: '',
+			workflowAgent: '',
+			contextJson: '',
+		},
+		{ results: { 'llm.enrich': { decision: 'allow', reason: 'authorization_granted_action_active' } } },
+	);
+	await new Allowly().execute.call(context);
+	assert.equal(context.requests[0].body.estimated_cost_micros, 0);
+	assert.ok(Object.hasOwn(context.requests[0].body, 'estimated_cost_micros'));
+});
+
+test('check omits the estimate at the -1 default', async () => {
+	const context = checkContext(
+		{
+			operation: 'check',
+			authorization: 'auth_123',
+			actions: 'llm.enrich',
+			resource: '',
+			session: '',
+			estimatedCostMicros: -1,
+			workflowUser: '',
+			workflowAgent: '',
+			contextJson: '',
+		},
+		{ results: { 'llm.enrich': { decision: 'allow', reason: 'authorization_granted_action_active' } } },
+	);
+	await new Allowly().execute.call(context);
+	assert.ok(!Object.hasOwn(context.requests[0].body, 'estimated_cost_micros'));
+});
+
 test('idempotency keys are stable per execution item', () => {
 	const key = n8nIdempotencyKey('42', 'Allowly 🔒', 0);
 	assert.equal(key, n8nIdempotencyKey('42', 'Allowly 🔒', 0));
