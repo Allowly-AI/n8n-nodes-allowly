@@ -36,7 +36,7 @@ Authorization: Bearer allowly_l1_s001_...
 }
 ```
 
-The node output includes `authorizationId`. Store it in your workflow or app data, then use it with the **Check** operation.
+The node output includes `authorizationId`. Store it in your workflow or app data, then use it with the **Check** operation. The selected policy must define `default_expiry_days`; this node does not invent an authorization expiry.
 
 Copy the policy ID from the Allowly dashboard into **Policy ID**.
 
@@ -65,11 +65,21 @@ Authorization: Bearer allowly_l1_s001_...
 
 Allowly authorizes from `authorization_id`. The user, agent, allowed actions, expiry, confirmation rules, escalation rules, and budget cap were defined when the authorization was created. Optional workflow user/agent fields in this node are copied into `context` only; they do not replace the authorization.
 
+For `confirm`, map `confirmNonce` into **Resolve Confirmation**. For `escalate`, map `escalationId` into **Resolve Escalation**. After approval or resolution, run a second **Check** node with a different node name so it receives a fresh idempotency key; replaying the first key returns the first decision.
+
 Docs: [Check API](https://allowly.ai/docs/api-reference/check/) and [decisions and attributes](https://allowly.ai/docs/api-reference/decisions-and-attributes/).
 
 ### Settle Budget
 
 Reports the actual cost of a budgeted check. Map **Check Receipt ID** from the budgeted action's `receipt.receipt_id`; for a multi-action check, use that action's receipt. Run settlement in the same workflow while the check receipt still exists.
+
+### Resolve Confirmation
+
+Approve or reject the `confirm_nonce` returned by **Check**. Approval is a customer-reported event and does not identify a named approver.
+
+### Resolve Escalation
+
+Report an approved or rejected escalation using its `escalation_id`. **Resolved By** is an opaque, customer-reported identifier recorded in the escalation receipt.
 
 ## Fields
 
@@ -94,7 +104,7 @@ Use an Allowly runtime key. Credential validation calls the runtime-scoped `GET 
 - **Action(s)**: one action name or comma/newline-separated action names to check.
 - **Resource**: optional action target, for example `gmail:thread:abc123`.
 - **Session**: optional workflow/session label copied into the signed receipt.
-- **Estimated Cost Micros**: optional micro-USD estimate for budgeted authorizations. `50_000_000` means `$50.00`. Reserved amounts stay charged until a **Settle Budget** step reports the actual cost.
+- **Estimated Cost Micros**: optional micro-USD estimate for budgeted authorizations, from `0` through `9007199254740991`. `50_000_000` means `$50.00`. Reserved amounts stay charged until a **Settle Budget** step reports the actual cost.
 - **Workflow User**: optional n8n workflow context field for traceability.
 - **Workflow Agent**: optional n8n workflow context field for traceability.
 - **Additional Context JSON**: optional JSON object copied into the Allowly check context and receipt.
@@ -102,7 +112,7 @@ Use an Allowly runtime key. Credential validation calls the runtime-scoped `GET 
 ### Settle Budget fields
 
 - **Check Receipt ID**: `receipt.receipt_id` from the budgeted action in the **Check** output.
-- **Actual Cost (micro-USD)**: actual non-negative integer cost. The check must include an estimate.
+- **Actual Cost (micro-USD)**: actual integer cost from `0` through `9007199254740991`. The check must include an estimate.
 - **Idempotency Key**: optional replay key; defaults to the n8n execution ID plus the check receipt ID.
 
 ## Why not use an email as `user_id`?

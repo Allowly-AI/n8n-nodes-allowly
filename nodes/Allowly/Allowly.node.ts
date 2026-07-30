@@ -26,12 +26,19 @@ type AllowlyActionResult = {
 	reason?: string;
 	receipt?: unknown;
 	policy_eval?: Record<string, unknown> | null;
+	confirm_nonce?: string;
+	confirm_expires_at?: string;
+	escalation_id?: string;
+	escalation_to?: string | null;
+	escalation_expires_at?: string;
 	[key: string]: unknown;
 };
 
 const DECISION_ORDER: Record<string, number> = { allow: 0, confirm: 1, escalate: 2, deny: 3 };
 
 const DEFAULT_API_URL = 'https://api.allowly.ai';
+
+const MAX_SAFE_INTEGER = 2 ** 53 - 1;
 
 function normalizeApiUrl(value: unknown): string {
 	const raw = String(value ?? DEFAULT_API_URL).trim();
@@ -128,14 +135,15 @@ export function parseEstimatedCostMicros(
 	if (value === undefined || value === null || value === '') return null;
 	const cost = Number(value);
 	if (cost === -1) return null;
-	if (!Number.isFinite(cost) || cost < 0) {
+	const rounded = Math.round(cost);
+	if (!Number.isSafeInteger(rounded) || rounded < 0 || Math.abs(cost - rounded) > 1e-6) {
 		throw new NodeOperationError(
 			executeFunctions.getNode(),
-			'Estimated Cost Micros must be a non-negative number (or -1 to omit).',
+			`Estimated Cost Micros must be a non-negative integer up to ${MAX_SAFE_INTEGER} (or -1 to omit).`,
 			{ itemIndex },
 		);
 	}
-	return Math.round(cost);
+	return rounded;
 }
 
 export function n8nIdempotencyKey(executionId: string, nodeName: string, itemIndex: number): string {
@@ -173,16 +181,28 @@ export class Allowly implements INodeType {
 				noDataExpression: true,
 				options: [
 					{
+						name: 'Check',
+						value: 'check',
+						description: 'Call /v1/check before a tool or agent action runs',
+						action: 'Check an authorization',
+					},
+					{
 						name: 'Create Authorization',
 						value: 'createAuthorization',
 						description: 'Create an authorization from a user ID and agent policy',
 						action: 'Create an authorization',
 					},
 					{
-						name: 'Check',
-						value: 'check',
-						description: 'Call /v1/check before a tool or agent action runs',
-						action: 'Check an authorization',
+						name: 'Resolve Confirmation',
+						value: 'resolveConfirmation',
+						description: 'Approve or reject a confirmation returned by Check',
+						action: 'Resolve a confirmation',
+					},
+					{
+						name: 'Resolve Escalation',
+						value: 'resolveEscalation',
+						description: 'Report an approved or rejected escalation',
+						action: 'Resolve an escalation',
 					},
 					{
 						name: 'Settle Budget',
@@ -395,6 +415,77 @@ export class Allowly implements INodeType {
 				},
 			},
 			{
+				displayName: 'Confirmation Nonce',
+				name: 'confirmationNonce',
+				type: 'string',
+				default: '',
+				required: true,
+				description: 'Map confirm_nonce from the Check result',
+				displayOptions: { show: { operation: ['resolveConfirmation'] } },
+			},
+			{
+				displayName: 'Approved',
+				name: 'confirmationApproved',
+				type: 'boolean',
+				default: true,
+				description: 'Whether the customer application reports that the prompt was approved',
+				displayOptions: { show: { operation: ['resolveConfirmation'] } },
+			},
+			{
+				displayName: 'Approval TTL Seconds',
+				name: 'confirmationTtlSeconds',
+				type: 'number',
+				typeOptions: { minValue: 1, maxValue: 300 },
+				default: 60,
+				description: 'How long an approved confirmation may satisfy the follow-up Check (1-300 seconds)',
+				displayOptions: { show: { operation: ['resolveConfirmation'] } },
+			},
+			{
+				displayName: 'Confirmation Idempotency Key',
+				name: 'confirmationIdempotencyKey',
+				type: 'string',
+				default: '',
+				description: 'Optional replay key. Defaults to this n8n execution, node, and item.',
+				displayOptions: { show: { operation: ['resolveConfirmation'] } },
+			},
+			{
+				displayName: 'Escalation ID',
+				name: 'escalationId',
+				type: 'string',
+				default: '',
+				required: true,
+				description: 'Map escalation_id from the Check result',
+				displayOptions: { show: { operation: ['resolveEscalation'] } },
+			},
+			{
+				displayName: 'Resolution',
+				name: 'escalationResolution',
+				type: 'options',
+				options: [
+					{ name: 'Approved', value: 'approved' },
+					{ name: 'Rejected', value: 'rejected' },
+				],
+				default: 'approved',
+				displayOptions: { show: { operation: ['resolveEscalation'] } },
+			},
+			{
+				displayName: 'Resolved By',
+				name: 'escalationResolvedBy',
+				type: 'string',
+				default: '',
+				required: true,
+				description: 'Opaque customer-reported approver identifier recorded in the escalation receipt',
+				displayOptions: { show: { operation: ['resolveEscalation'] } },
+			},
+			{
+				displayName: 'Note',
+				name: 'escalationNote',
+				type: 'string',
+				default: '',
+				description: 'Optional customer-reported resolution note',
+				displayOptions: { show: { operation: ['resolveEscalation'] } },
+			},
+			{
 				displayName: 'Actual Cost (Micro-USD)',
 				name: 'actualCostMicros',
 				type: 'number',
@@ -510,10 +601,10 @@ export class Allowly implements INodeType {
 					if (!checkReceiptId) {
 						throw new NodeOperationError(this.getNode(), 'Check Receipt ID is required.', { itemIndex });
 					}
-					if (!Number.isInteger(actualCostMicros) || actualCostMicros < 0) {
+					if (!Number.isSafeInteger(actualCostMicros) || actualCostMicros < 0) {
 						throw new NodeOperationError(
 							this.getNode(),
-							'Actual Cost (micro-USD) must be a non-negative integer.',
+							`Actual Cost (micro-USD) must be a non-negative integer up to ${MAX_SAFE_INTEGER}.`,
 							{ itemIndex },
 						);
 					}
@@ -540,6 +631,68 @@ export class Allowly implements INodeType {
 					continue;
 				}
 
+				if (operation === 'resolveConfirmation') {
+					const nonce = (this.getNodeParameter('confirmationNonce', itemIndex) as string).trim();
+					const approved = this.getNodeParameter('confirmationApproved', itemIndex) as boolean;
+					const ttlSeconds = Number(this.getNodeParameter('confirmationTtlSeconds', itemIndex));
+					const confirmationIdempotencyKey =
+						(this.getNodeParameter('confirmationIdempotencyKey', itemIndex) as string).trim() || idempotencyKey;
+					if (!nonce) throw new NodeOperationError(this.getNode(), 'Confirmation Nonce is required.', { itemIndex });
+					if (!Number.isInteger(ttlSeconds) || ttlSeconds < 1 || ttlSeconds > 300) {
+						throw new NodeOperationError(this.getNode(), 'Approval TTL Seconds must be an integer from 1 to 300.', { itemIndex });
+					}
+					const response = (await this.helpers.httpRequestWithAuthentication.call(this, 'allowlyApi', {
+						method: 'POST',
+						url: `${apiUrl}/v1/confirmations/${encodeURIComponent(nonce)}`,
+						headers: {
+							'Content-Type': 'application/json',
+							'Idempotency-Key': confirmationIdempotencyKey,
+						},
+						body: { approved, ttl_seconds: ttlSeconds },
+						json: true,
+					})) as Record<string, unknown>;
+					returnData.push({
+						json: response as IDataObject,
+						pairedItem: { item: itemIndex },
+					});
+					continue;
+				}
+
+				if (operation === 'resolveEscalation') {
+					const escalationId = (this.getNodeParameter('escalationId', itemIndex) as string).trim();
+					const resolution = this.getNodeParameter('escalationResolution', itemIndex) as string;
+					const resolvedBy = (this.getNodeParameter('escalationResolvedBy', itemIndex) as string).trim();
+					const note = (this.getNodeParameter('escalationNote', itemIndex) as string).trim();
+					if (!escalationId) throw new NodeOperationError(this.getNode(), 'Escalation ID is required.', { itemIndex });
+					if (!resolvedBy) throw new NodeOperationError(this.getNode(), 'Resolved By is required.', { itemIndex });
+					if (!['approved', 'rejected'].includes(resolution)) {
+						throw new NodeOperationError(this.getNode(), 'Resolution must be approved or rejected.', { itemIndex });
+					}
+					if (resolvedBy.length > 128) {
+						throw new NodeOperationError(this.getNode(), 'Resolved By must be at most 128 characters.', { itemIndex });
+					}
+					if (note.length > 512) {
+						throw new NodeOperationError(this.getNode(), 'Note must be at most 512 characters.', { itemIndex });
+					}
+					const body: Record<string, unknown> = {
+						resolution,
+						resolved_by: resolvedBy,
+					};
+					if (note) body.note = note;
+					const response = (await this.helpers.httpRequestWithAuthentication.call(this, 'allowlyApi', {
+						method: 'POST',
+						url: `${apiUrl}/v1/escalations/${encodeURIComponent(escalationId)}/resolve`,
+						headers: { 'Content-Type': 'application/json' },
+						body,
+						json: true,
+					})) as Record<string, unknown>;
+					returnData.push({
+						json: response as IDataObject,
+						pairedItem: { item: itemIndex },
+					});
+					continue;
+				}
+
 				const authorizationId = (this.getNodeParameter('authorization', itemIndex) as string).trim();
 				const actions = parseActions(this.getNodeParameter('actions', itemIndex) as string);
 				const resource = this.getNodeParameter('resource', itemIndex) as string;
@@ -558,6 +711,9 @@ export class Allowly implements INodeType {
 				}
 				if (actions.length === 0) {
 					throw new NodeOperationError(this.getNode(), 'At least one action is required.', { itemIndex });
+				}
+				if (actions.length > 25) {
+					throw new NodeOperationError(this.getNode(), 'At most 25 actions may be checked at once.', { itemIndex });
 				}
 
 				if (workflowUserId.trim()) context.workflow_user_id = workflowUserId.trim();
@@ -597,6 +753,11 @@ export class Allowly implements INodeType {
 						reason: result.reason,
 						receipt: result.receipt,
 						policyEval: result.policy_eval ?? null,
+						confirmNonce: result.confirm_nonce,
+						confirmExpiresAt: result.confirm_expires_at,
+						escalationId: result.escalation_id,
+						escalationTo: result.escalation_to,
+						escalationExpiresAt: result.escalation_expires_at,
 						results: response.results,
 						response,
 					} as IDataObject,

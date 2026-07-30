@@ -65,6 +65,12 @@ test('explicit zero estimate is preserved; -1 and absent are omitted', () => {
 	assert.equal(parseEstimatedCostMicros(undefined, null, 0), null);
 });
 
+test('estimated cost rejects fractional and unsafe integers', () => {
+	const executeFunctions = { getNode: () => ({ name: 'Allowly' }) };
+	assert.throws(() => parseEstimatedCostMicros(1.5, executeFunctions, 0), /non-negative integer/);
+	assert.throws(() => parseEstimatedCostMicros(Number.MAX_SAFE_INTEGER + 1, executeFunctions, 0), /non-negative integer/);
+});
+
 function checkContext(parameters, response) {
 	const requests = [];
 	return {
@@ -154,6 +160,67 @@ test('budget settlement passes through the response and defaults the idempotency
 		context.requests.map((request) => request.headers['Idempotency-Key']),
 		['execution-42:rcp_check_123', 'execution-42:rcp_check_456'],
 	);
+});
+
+function resolutionContext(operation, parameters, response) {
+	const requests = [];
+	return {
+		requests,
+		getInputData: () => [{ json: {} }],
+		getCredentials: async () => ({ apiUrl: 'https://api.allowly.ai' }),
+		getNodeParameter: (name) => (name === 'operation' ? operation : parameters[name]),
+		getExecutionId: () => 'execution-42',
+		getNode: () => ({ name: operation }),
+		continueOnFail: () => false,
+		helpers: {
+			httpRequestWithAuthentication: async (_credentials, options) => {
+				requests.push(options);
+				return response;
+			},
+		},
+	};
+}
+
+test('resolves a confirmation with an idempotency key', async () => {
+	const context = resolutionContext(
+		'resolveConfirmation',
+		{
+			confirmationNonce: 'nonce/value',
+			confirmationApproved: true,
+			confirmationTtlSeconds: 60,
+			confirmationIdempotencyKey: 'confirm-1',
+		},
+		{ decision: 'approved', authorization_id: 'auth_child' },
+	);
+
+	await new Allowly().execute.call(context);
+	assert.equal(context.requests[0].url, 'https://api.allowly.ai/v1/confirmations/nonce%2Fvalue');
+	assert.equal(context.requests[0].headers['Idempotency-Key'], 'confirm-1');
+	assert.deepEqual(context.requests[0].body, {
+		approved: true,
+		ttl_seconds: 60,
+	});
+});
+
+test('resolves an escalation with a customer-reported actor', async () => {
+	const context = resolutionContext(
+		'resolveEscalation',
+		{
+			escalationId: 'esc/value',
+			escalationResolution: 'rejected',
+			escalationResolvedBy: 'ops:user_123',
+			escalationNote: 'suppression match',
+		},
+		{ escalation_id: 'esc/value', status: 'rejected' },
+	);
+
+	await new Allowly().execute.call(context);
+	assert.equal(context.requests[0].url, 'https://api.allowly.ai/v1/escalations/esc%2Fvalue/resolve');
+	assert.deepEqual(context.requests[0].body, {
+		resolution: 'rejected',
+		resolved_by: 'ops:user_123',
+		note: 'suppression match',
+	});
 });
 
 for (const code of [
