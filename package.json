@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-allowly",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "n8n community node for creating Allowly authorizations and checking agent actions",
   "keywords": [
     "n8n-community-node-package",
@@ -20,7 +20,8 @@
     "url": "git+https://github.com/Allowly-AI/n8n-nodes-allowly.git"
   },
   "author": {
-    "name": "Allowly LLC"
+    "name": "Allowly LLC",
+    "email": "support@allowly.ai"
   },
   "main": "dist/nodes/Allowly/Allowly.node.js",
   "types": "dist/nodes/Allowly/Allowly.node.d.ts",
