@@ -1,4 +1,4 @@
-import type { ICredentialType, INodeProperties } from 'n8n-workflow';
+import type { ICredentialTestRequest, ICredentialType, INodeProperties } from 'n8n-workflow';
 
 export class AllowlyApi implements ICredentialType {
 	name = 'allowlyApi';
@@ -18,7 +18,7 @@ export class AllowlyApi implements ICredentialType {
 		},
 	};
 
-	test = {
+	test: ICredentialTestRequest = {
 		request: {
 			method: 'GET' as const,
 			url: 'https://api.allowly.ai/v1/authorizations?limit=1',

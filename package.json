@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-allowly",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "n8n community node for creating Allowly authorizations and checking agent actions",
   "keywords": [
     "n8n-community-node-package",
