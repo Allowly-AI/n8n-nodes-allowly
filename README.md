@@ -86,9 +86,10 @@ Report an approved or rejected escalation using its `escalation_id`. **Resolved 
 ### Credential fields
 
 - **API Key**: Allowly API key used to call the API. Keep it server-side.
-- **API URL**: Allowly API origin. Use only `https://api.allowly.ai`.
+- **User ID Pepper**: optional encrypted credential used by **Mask Email Locally**. Back it up; changing it changes derived user IDs.
 
 Use an Allowly runtime key. Credential validation calls the runtime-scoped `GET /v1/authorizations` endpoint.
+All requests use the hosted Allowly API at `https://api.allowly.ai`.
 
 ### Create Authorization fields
 
@@ -96,7 +97,6 @@ Use an Allowly runtime key. Credential validation calls the runtime-scoped `GET 
 - **User Identifier**: choose how this node produces `user_id`.
 - **User ID**: opaque internal app user ID sent directly as `user_id`.
 - **User Email**: email to mask locally when **User Identifier** is set to **Mask Email Locally**.
-- **User ID Pepper**: stable app-held HMAC secret. Back it up; changing it changes derived user IDs.
 
 ### Check fields
 
@@ -131,7 +131,7 @@ The **Mask Email Locally** mode does the masking inside n8n before the API reque
 3. HMAC-SHA256 with your **User ID Pepper**.
 4. Send only `email_hmac:v1:<digest>` to Allowly.
 
-The raw email is not sent to Allowly and is not included in the node output. Do not lose or rotate the pepper casually: it is a permanent app-held secret. If it changes, the same email derives to a different `user_id`, and existing authorizations will no longer match.
+The raw email is not sent to Allowly and is not included in the node output. The pepper stays in the encrypted Allowly credential. Do not lose or rotate it casually: if it changes, the same email derives to a different `user_id`, and existing authorizations will no longer match.
 
 More: [PII-safe identifiers](https://allowly.ai/docs/sdk/identifiers/).
 
