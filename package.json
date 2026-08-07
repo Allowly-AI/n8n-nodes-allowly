@@ -11,6 +11,9 @@
     "receipts"
   ],
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "homepage": "https://allowly.ai",
   "repository": {
     "type": "git",
