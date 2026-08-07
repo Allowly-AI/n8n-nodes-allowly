@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { AllowlyApi } = require('../dist/credentials/AllowlyApi.credentials.js');
 const {
 	Allowly,
 	mostRestrictiveResult,
@@ -18,7 +19,7 @@ function settlementContext(response, checkReceiptIds = ['rcp_check_123']) {
 	return {
 		requests,
 		getInputData: () => checkReceiptIds.map(() => ({ json: {} })),
-		getCredentials: async () => ({ apiUrl: 'https://api.allowly.ai' }),
+		getCredentials: async () => ({}),
 		getNodeParameter: (name, itemIndex) =>
 			name === 'checkReceiptId' ? checkReceiptIds[itemIndex] : parameters[name],
 		getExecutionId: () => 'execution-42',
@@ -76,7 +77,7 @@ function checkContext(parameters, response) {
 	return {
 		requests,
 		getInputData: () => [{ json: {} }],
-		getCredentials: async () => ({ apiUrl: 'https://api.allowly.ai' }),
+		getCredentials: async () => ({}),
 		getNodeParameter: (name) => parameters[name],
 		getExecutionId: () => 'execution-42',
 		getNode: () => ({ name: 'Allowly' }),
@@ -136,6 +137,48 @@ test('idempotency keys are stable per execution item', () => {
 	assert.match(key, /^n8n:[A-Za-z0-9_-]{43}$/);
 });
 
+test('keeps the email pepper in credentials and pins requests to the Allowly API', async () => {
+	const credential = new AllowlyApi();
+	const pepperProperty = credential.properties.find(({ name }) => name === 'userIdPepper');
+	assert.equal(credential.properties.some(({ name }) => name === 'apiUrl'), false);
+	assert.equal(pepperProperty.typeOptions.password, true);
+	assert.equal(new Allowly().description.properties.some(({ name }) => name === 'userIdPepper'), false);
+
+	const requests = [];
+	const parameters = {
+		operation: 'createAuthorization',
+		policyId: 'policy_123',
+		userIdentifierMode: 'emailHmac',
+		userEmail: ' Alice@Example.COM ',
+	};
+	const context = {
+		getInputData: () => [{ json: {} }],
+		getCredentials: async () => ({
+			apiUrl: 'https://attacker.example',
+			userIdPepper: 'credential-secret',
+		}),
+		getNodeParameter: (name) => {
+			assert.notEqual(name, 'userIdPepper');
+			return parameters[name];
+		},
+		getExecutionId: () => 'execution-42',
+		getNode: () => ({ name: 'Allowly' }),
+		continueOnFail: () => false,
+		helpers: {
+			httpRequestWithAuthentication: async (_credentials, options) => {
+				requests.push(options);
+				return { authorization_id: 'auth_123' };
+			},
+		},
+	};
+
+	const output = await new Allowly().execute.call(context);
+	const expectedUserId = 'email_hmac:v1:3ICm-xnjBrsMfGEj1mG6hCoepxjL2ZRlvmWNig2XUk0';
+	assert.equal(requests[0].url, 'https://api.allowly.ai/v1/authorizations');
+	assert.equal(requests[0].body.user_id, expectedUserId);
+	assert.equal(output[0][0].json.userId, expectedUserId);
+});
+
 test('budget settlement passes through the response and defaults the idempotency key', async () => {
 	const response = {
 		check_receipt_id: 'rcp_check_123',
@@ -167,7 +210,7 @@ function resolutionContext(operation, parameters, response) {
 	return {
 		requests,
 		getInputData: () => [{ json: {} }],
-		getCredentials: async () => ({ apiUrl: 'https://api.allowly.ai' }),
+		getCredentials: async () => ({}),
 		getNodeParameter: (name) => (name === 'operation' ? operation : parameters[name]),
 		getExecutionId: () => 'execution-42',
 		getNode: () => ({ name: operation }),

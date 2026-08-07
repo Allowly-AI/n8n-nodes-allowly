@@ -21,7 +21,7 @@ export class AllowlyApi implements ICredentialType {
 	test = {
 		request: {
 			method: 'GET' as const,
-			url: '={{$credentials.apiUrl.replace(/\\/+$/, "") + "/v1/authorizations?limit=1"}}',
+			url: 'https://api.allowly.ai/v1/authorizations?limit=1',
 		},
 	};
 
@@ -38,12 +38,15 @@ export class AllowlyApi implements ICredentialType {
 			description: 'Allowly API key. Keep it server-side and do not expose it in browser workflows.',
 		},
 		{
-			displayName: 'API URL',
-			name: 'apiUrl',
+			displayName: 'User ID Pepper',
+			name: 'userIdPepper',
 			type: 'string',
-			default: 'https://api.allowly.ai',
-			required: true,
-			description: 'Allowly API origin. Use only https://api.allowly.ai.',
+			typeOptions: {
+				password: true,
+			},
+			default: '',
+			description:
+				'Optional stable secret for Mask Email Locally. Back it up; changing it changes derived user IDs.',
 		},
 	];
 }

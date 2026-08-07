@@ -36,55 +36,9 @@ type AllowlyActionResult = {
 
 const DECISION_ORDER: Record<string, number> = { allow: 0, confirm: 1, escalate: 2, deny: 3 };
 
-const DEFAULT_API_URL = 'https://api.allowly.ai';
+const API_URL = 'https://api.allowly.ai';
 
 const MAX_SAFE_INTEGER = 2 ** 53 - 1;
-
-function normalizeApiUrl(
-	value: unknown,
-	executeFunctions: IExecuteFunctions,
-	itemIndex: number,
-): string {
-	const raw = String(value ?? DEFAULT_API_URL).trim();
-	if (!raw) return DEFAULT_API_URL;
-
-	let parsed: URL;
-	try {
-		parsed = new URL(raw);
-	} catch {
-		throw new NodeOperationError(executeFunctions.getNode(), 'API URL must be a valid absolute URL.', {
-			itemIndex,
-		});
-	}
-
-	if (!['https:', 'http:'].includes(parsed.protocol)) {
-		throw new NodeOperationError(executeFunctions.getNode(), 'API URL must use http or https.', {
-			itemIndex,
-		});
-	}
-	if (!parsed.hostname) {
-		throw new NodeOperationError(executeFunctions.getNode(), 'API URL must include a hostname.', {
-			itemIndex,
-		});
-	}
-	if (parsed.username || parsed.password) {
-		throw new NodeOperationError(executeFunctions.getNode(), 'API URL must not include embedded credentials.', {
-			itemIndex,
-		});
-	}
-	if (parsed.pathname && parsed.pathname !== '/') {
-		throw new NodeOperationError(executeFunctions.getNode(), 'API URL must be a base origin without a path.', {
-			itemIndex,
-		});
-	}
-	if (parsed.search || parsed.hash) {
-		throw new NodeOperationError(executeFunctions.getNode(), 'API URL must not include query strings or fragments.', {
-			itemIndex,
-		});
-	}
-
-	return `${parsed.protocol}//${parsed.host}`;
-}
 
 function parseActions(value: string): string[] {
 	return Array.from(
@@ -250,7 +204,7 @@ export class Allowly implements INodeType {
 					{
 						name: 'Mask Email Locally',
 						value: 'emailHmac',
-						description: 'Derive email_hmac:v1 locally with a pepper before sending to Allowly',
+						description: 'Derive email_hmac:v1 locally with the credential pepper before sending to Allowly',
 					},
 					{
 						name: 'Opaque User ID',
@@ -287,24 +241,6 @@ export class Allowly implements INodeType {
 				default: '',
 				required: true,
 				description: 'Email to HMAC locally. The raw email is not sent to Allowly.',
-				displayOptions: {
-					show: {
-						operation: ['createAuthorization'],
-						userIdentifierMode: ['emailHmac'],
-					},
-				},
-			},
-			{
-				displayName: 'User ID Pepper',
-				name: 'userIdPepper',
-				type: 'string',
-				typeOptions: {
-					password: true,
-				},
-				default: '',
-				required: true,
-				description:
-					'Stable app-held secret for email HMAC. Back it up; changing it changes derived user IDs.',
 				displayOptions: {
 					show: {
 						operation: ['createAuthorization'],
@@ -536,7 +472,6 @@ export class Allowly implements INodeType {
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex += 1) {
 			try {
 				const credentials = await this.getCredentials('allowlyApi', itemIndex);
-				const apiUrl = normalizeApiUrl(credentials.apiUrl, this, itemIndex);
 				const operation = this.getNodeParameter('operation', itemIndex) as string;
 				const idempotencyKey = n8nIdempotencyKey(
 					this.getExecutionId(),
@@ -555,7 +490,7 @@ export class Allowly implements INodeType {
 
 					if (userIdentifierMode === 'emailHmac') {
 						const userEmail = (this.getNodeParameter('userEmail', itemIndex) as string).trim();
-						const userIdPepper = this.getNodeParameter('userIdPepper', itemIndex) as string;
+						const userIdPepper = String(credentials.userIdPepper ?? '');
 
 						if (!userEmail) {
 							throw new NodeOperationError(this.getNode(), 'User Email is required.', { itemIndex });
@@ -574,7 +509,7 @@ export class Allowly implements INodeType {
 
 					const options: IHttpRequestOptions = {
 						method: 'POST',
-						url: `${apiUrl}/v1/authorizations`,
+						url: `${API_URL}/v1/authorizations`,
 						headers: {
 							'Content-Type': 'application/json',
 							'Idempotency-Key': idempotencyKey,
@@ -629,7 +564,7 @@ export class Allowly implements INodeType {
 						'allowlyApi',
 						{
 							method: 'POST',
-							url: `${apiUrl}/v1/budget-settlements`,
+							url: `${API_URL}/v1/budget-settlements`,
 							headers: {
 								'Content-Type': 'application/json',
 								'Idempotency-Key': settlementIdempotencyKey,
@@ -658,7 +593,7 @@ export class Allowly implements INodeType {
 					}
 					const response = (await this.helpers.httpRequestWithAuthentication.call(this, 'allowlyApi', {
 						method: 'POST',
-						url: `${apiUrl}/v1/confirmations/${encodeURIComponent(nonce)}`,
+						url: `${API_URL}/v1/confirmations/${encodeURIComponent(nonce)}`,
 						headers: {
 							'Content-Type': 'application/json',
 							'Idempotency-Key': confirmationIdempotencyKey,
@@ -696,7 +631,7 @@ export class Allowly implements INodeType {
 					if (note) body.note = note;
 					const response = (await this.helpers.httpRequestWithAuthentication.call(this, 'allowlyApi', {
 						method: 'POST',
-						url: `${apiUrl}/v1/escalations/${encodeURIComponent(escalationId)}/resolve`,
+						url: `${API_URL}/v1/escalations/${encodeURIComponent(escalationId)}/resolve`,
 						headers: { 'Content-Type': 'application/json' },
 						body,
 						json: true,
@@ -745,7 +680,7 @@ export class Allowly implements INodeType {
 
 				const options: IHttpRequestOptions = {
 					method: 'POST',
-					url: `${apiUrl}/v1/check`,
+					url: `${API_URL}/v1/check`,
 					headers: {
 						'Content-Type': 'application/json',
 						'Idempotency-Key': idempotencyKey,
