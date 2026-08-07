@@ -26,4 +26,8 @@ jobs:
         run: npm ci
 
       - name: Publish with provenance
-        run: npm run release
+        run: |
+          [ -n "$NPM_TOKEN" ] && npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
+          npm run release
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

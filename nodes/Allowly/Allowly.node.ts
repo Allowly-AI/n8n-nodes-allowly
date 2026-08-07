@@ -7,7 +7,7 @@ import type {
 	INodeType,
 	INodeTypeDescription,
 } from 'n8n-workflow';
-import { ApplicationError, NodeOperationError } from 'n8n-workflow';
+import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 
 type AllowlyCheckResponse = {
 	authorization_id?: string;
@@ -40,7 +40,11 @@ const DEFAULT_API_URL = 'https://api.allowly.ai';
 
 const MAX_SAFE_INTEGER = 2 ** 53 - 1;
 
-function normalizeApiUrl(value: unknown): string {
+function normalizeApiUrl(
+	value: unknown,
+	executeFunctions: IExecuteFunctions,
+	itemIndex: number,
+): string {
 	const raw = String(value ?? DEFAULT_API_URL).trim();
 	if (!raw) return DEFAULT_API_URL;
 
@@ -48,23 +52,35 @@ function normalizeApiUrl(value: unknown): string {
 	try {
 		parsed = new URL(raw);
 	} catch {
-		throw new ApplicationError('API URL must be a valid absolute URL.');
+		throw new NodeOperationError(executeFunctions.getNode(), 'API URL must be a valid absolute URL.', {
+			itemIndex,
+		});
 	}
 
 	if (!['https:', 'http:'].includes(parsed.protocol)) {
-		throw new ApplicationError('API URL must use http or https.');
+		throw new NodeOperationError(executeFunctions.getNode(), 'API URL must use http or https.', {
+			itemIndex,
+		});
 	}
 	if (!parsed.hostname) {
-		throw new ApplicationError('API URL must include a hostname.');
+		throw new NodeOperationError(executeFunctions.getNode(), 'API URL must include a hostname.', {
+			itemIndex,
+		});
 	}
 	if (parsed.username || parsed.password) {
-		throw new ApplicationError('API URL must not include embedded credentials.');
+		throw new NodeOperationError(executeFunctions.getNode(), 'API URL must not include embedded credentials.', {
+			itemIndex,
+		});
 	}
 	if (parsed.pathname && parsed.pathname !== '/') {
-		throw new ApplicationError('API URL must be a base origin without a path.');
+		throw new NodeOperationError(executeFunctions.getNode(), 'API URL must be a base origin without a path.', {
+			itemIndex,
+		});
 	}
 	if (parsed.search || parsed.hash) {
-		throw new ApplicationError('API URL must not include query strings or fragments.');
+		throw new NodeOperationError(executeFunctions.getNode(), 'API URL must not include query strings or fragments.', {
+			itemIndex,
+		});
 	}
 
 	return `${parsed.protocol}//${parsed.host}`;
@@ -107,21 +123,20 @@ export function parseContext(value: unknown, executeFunctions: IExecuteFunctions
 	const raw = String(value ?? '').trim();
 	if (!raw) return {};
 
+	let parsed: unknown;
 	try {
-		const parsed: unknown = JSON.parse(raw);
-		if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-			throw new NodeOperationError(executeFunctions.getNode(), 'Context JSON must be an object', { itemIndex });
-		}
-		return parsed as Record<string, unknown>;
+		parsed = JSON.parse(raw);
 	} catch (error) {
-		if (error instanceof NodeOperationError) throw error;
-
 		throw new NodeOperationError(
 			executeFunctions.getNode(),
 			`Context JSON is invalid: ${(error as Error).message}`,
 			{ itemIndex },
 		);
 	}
+	if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+		throw new NodeOperationError(executeFunctions.getNode(), 'Context JSON must be an object', { itemIndex });
+	}
+	return parsed as Record<string, unknown>;
 }
 
 export function parseEstimatedCostMicros(
@@ -165,8 +180,8 @@ export class Allowly implements INodeType {
 		defaults: {
 			name: 'Allowly',
 		},
-		inputs: ['main'],
-		outputs: ['main'],
+		inputs: [NodeConnectionTypes.Main],
+		outputs: [NodeConnectionTypes.Main],
 		credentials: [
 			{
 				name: 'allowlyApi',
@@ -233,14 +248,14 @@ export class Allowly implements INodeType {
 				noDataExpression: true,
 				options: [
 					{
-						name: 'Opaque User ID',
-						value: 'opaque',
-						description: 'Use an internal app user ID or pre-derived Allowly-safe user ID',
-					},
-					{
 						name: 'Mask Email Locally',
 						value: 'emailHmac',
 						description: 'Derive email_hmac:v1 locally with a pepper before sending to Allowly',
+					},
+					{
+						name: 'Opaque User ID',
+						value: 'opaque',
+						description: 'Use an internal app user ID or pre-derived Allowly-safe user ID',
 					},
 				],
 				default: 'opaque',
@@ -521,7 +536,7 @@ export class Allowly implements INodeType {
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex += 1) {
 			try {
 				const credentials = await this.getCredentials('allowlyApi', itemIndex);
-				const apiUrl = normalizeApiUrl(credentials.apiUrl);
+				const apiUrl = normalizeApiUrl(credentials.apiUrl, this, itemIndex);
 				const operation = this.getNodeParameter('operation', itemIndex) as string;
 				const idempotencyKey = n8nIdempotencyKey(
 					this.getExecutionId(),
@@ -778,7 +793,11 @@ export class Allowly implements INodeType {
 					continue;
 				}
 
-				throw error;
+				throw new NodeOperationError(
+					this.getNode(),
+					error instanceof Error ? error : String(error),
+					{ itemIndex },
+				);
 			}
 		}
 

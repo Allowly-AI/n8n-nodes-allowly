@@ -38,6 +38,7 @@
   ],
   "n8n": {
     "n8nNodesApiVersion": 1,
+    "strict": true,
     "credentials": [
       "dist/credentials/AllowlyApi.credentials.js"
     ],
@@ -55,10 +56,5 @@
   },
   "peerDependencies": {
     "n8n-workflow": "*"
-  },
-  "overrides": {
-    "@n8n/node-cli": {
-      "change-case": "4.1.2"
-    }
   }
 }
