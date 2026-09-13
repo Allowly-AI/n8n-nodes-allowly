@@ -48,7 +48,7 @@ No policy or authorization setup is required. One seal uses one decision from th
 
 ### Verify JSON Seal
 
-Supply the original JSON, the full signed receipt, and the expected workspace ID retained from the authenticated sealing run. The node obtains that workspace's keys from the fixed Allowly API origin and reports signature verification and record matching separately. A changed record can therefore return `signatureVerified: true` with `recordMatches: false`.
+Supply the original JSON, the full signed receipt, and the expected workspace ID retained from the authenticated sealing run. The node obtains that workspace's keys from the fixed Allowly API origin. It returns a verified result only when both the signature and record match. A changed record raises `SEAL verification failed: record_mismatch`.
 
 Keep the original JSON, full receipt, workspace ID, key document, and trusted key fingerprints together. Hosted receipt and key availability is not permanent; the evidence can be verified offline later with retained trusted key material.
 
@@ -203,10 +203,10 @@ Raw JSON mode returns `recordJson` instead of `record` so the original text can 
 
 ```json
 {
-  "verified": false,
+  "verified": true,
   "signatureVerified": true,
-  "recordMatches": false,
-  "failureReason": "record_mismatch",
+  "recordMatches": true,
+  "failureReason": null,
   "expectedWorkspaceId": "ws_...",
   "receipt": {},
   "keysDocument": {},

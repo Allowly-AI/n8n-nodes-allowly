@@ -1,4 +1,4 @@
-/* Bundled from @allowly/verifier 4.1.0 at allowly-receipt-format ca8b979. See THIRD_PARTY_NOTICES.md. */
+/* Bundled from @allowly/verifier 4.1.0 at allowly-receipt-format d35f181. See THIRD_PARTY_NOTICES.md. */
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -867,10 +867,7 @@ function hashSealJson(rawJson) {
   let record;
   try {
     parse(namespaceObjectKeysForValidation(text), void 0, {
-      parseNumber: parseSealNumber,
-      onDuplicateKey: ({ key }) => {
-        throw new SealInputError("duplicate_key", `duplicate decoded object key: ${JSON.stringify(key.slice(1))}`);
-      }
+      parseNumber: parseSealNumber
     });
     record = JSON.parse(text);
   } catch (error) {
@@ -882,10 +879,15 @@ function hashSealJson(rawJson) {
 }
 function namespaceObjectKeysForValidation(text) {
   const chunks = [];
+  const objectKeys = [];
   let chunkStart = 0;
   let index = 0;
   while (index < text.length) {
     if (text[index] !== '"') {
+      if (text[index] === "{")
+        objectKeys.push(/* @__PURE__ */ new Set());
+      else if (text[index] === "}")
+        objectKeys.pop();
       index += 1;
       continue;
     }
@@ -911,9 +913,16 @@ function namespaceObjectKeysForValidation(text) {
     if (text[next] === ":") {
       try {
         const key = JSON.parse(text.slice(tokenStart, tokenEnd));
+        const keys = objectKeys.at(-1);
+        if (keys?.has(key)) {
+          throw new SealInputError("duplicate_key", `duplicate decoded object key: ${JSON.stringify(key)}`);
+        }
+        keys?.add(key);
         chunks.push(text.slice(chunkStart, tokenStart), JSON.stringify(`\0${key}`));
         chunkStart = tokenEnd;
-      } catch {
+      } catch (error) {
+        if (error instanceof SealInputError)
+          throw error;
       }
     }
     index = tokenEnd;
@@ -986,7 +995,7 @@ function decodeRawSealJson(rawJson) {
   }
   const bytes = new Uint8Array(rawJson);
   try {
-    return { bytes, text: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };
+    return { bytes, text: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes) };
   } catch (error) {
     throw new SealInputError("invalid_utf8", "record must be well-formed UTF-8");
   }
