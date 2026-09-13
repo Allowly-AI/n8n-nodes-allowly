@@ -1,7 +1,7 @@
 {
   "name": "n8n-nodes-allowly",
-  "version": "0.1.2",
-  "description": "n8n community node for creating Allowly authorizations and checking agent actions",
+  "version": "0.2.0",
+  "description": "n8n community node for sealing JSON records and checking agent actions with Allowly",
   "keywords": [
     "n8n-community-node-package",
     "n8n",
@@ -23,6 +23,9 @@
     "name": "Allowly LLC",
     "email": "support@allowly.ai"
   },
+  "engines": {
+    "node": ">=20"
+  },
   "main": "dist/nodes/Allowly/Allowly.node.js",
   "types": "dist/nodes/Allowly/Allowly.node.d.ts",
   "scripts": {
@@ -38,7 +41,10 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "THIRD_PARTY_NOTICES.md",
+    "VERIFIER_PROVENANCE.json",
+    "licenses"
   ],
   "n8n": {
     "n8nNodesApiVersion": 1,

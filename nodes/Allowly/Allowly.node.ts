@@ -7,7 +7,13 @@ import type {
 	INodeType,
 	INodeTypeDescription,
 } from 'n8n-workflow';
-import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
+import { NodeConnectionTypes, NodeOperationError, sleep } from 'n8n-workflow';
+import * as sealVerifier from './seal-verifier.js';
+import type {
+	KeyDocument,
+	PublicKey,
+	SealVerificationResult,
+} from './seal-verifier.js';
 
 type AllowlyCheckResponse = {
 	authorization_id?: string;
@@ -34,11 +40,178 @@ type AllowlyActionResult = {
 	[key: string]: unknown;
 };
 
+type AllowlyReceiptEnvelope = {
+	status?: string;
+	receipt_id?: string;
+	receipt?: Record<string, unknown>;
+	[key: string]: unknown;
+};
+
+type AllowlySealResponse = {
+	request_id: string;
+	workspace_id?: string;
+	profile?: string;
+	record_sha256?: string;
+	decision?: string;
+	reason?: string;
+	receipt?: AllowlyReceiptEnvelope;
+	[key: string]: unknown;
+};
+
+type RecordInput =
+	| { kind: 'json'; value: string }
+	| { kind: 'value'; value: unknown };
+
 const DECISION_ORDER: Record<string, number> = { allow: 0, confirm: 1, escalate: 2, deny: 3 };
 
 const API_URL = 'https://api.allowly.ai';
 
 const MAX_SAFE_INTEGER = 2 ** 53 - 1;
+
+function recordInput(
+	executeFunctions: IExecuteFunctions,
+	itemIndex: number,
+): RecordInput {
+	const mode = executeFunctions.getNodeParameter('sealRecordInputMode', itemIndex) as string;
+	if (mode === 'rawJson') {
+		const value = executeFunctions.getNodeParameter('sealRecordJson', itemIndex);
+		if (typeof value !== 'string') {
+			throw new NodeOperationError(
+				executeFunctions.getNode(),
+				'Raw JSON Text must be a string.',
+				{ itemIndex },
+			);
+		}
+		return { kind: 'json', value };
+	}
+	return {
+		kind: 'value',
+		value: executeFunctions.getNodeParameter('sealRecordValue', itemIndex),
+	};
+}
+
+async function recordSha256(input: RecordInput): Promise<string> {
+	return input.kind === 'json'
+		? sealVerifier.hashSealJson(input.value)
+		: sealVerifier.hashSealValue(input.value);
+}
+
+async function verifyRecord(
+	input: RecordInput,
+	receipt: Record<string, unknown>,
+	publicKeys: PublicKey[],
+	expectedWorkspaceId: string,
+): Promise<SealVerificationResult> {
+	const options = { expectedWorkspaceId };
+	return input.kind === 'json'
+		? sealVerifier.verifySealJson(input.value, receipt, publicKeys, options)
+		: sealVerifier.verifySealValue(input.value, receipt, publicKeys, options);
+}
+
+function signedReceipt(envelope: AllowlyReceiptEnvelope): Record<string, unknown> | null {
+	return envelope.status === 'signed' && envelope.receipt && typeof envelope.receipt === 'object'
+		? envelope.receipt
+		: null;
+}
+
+export async function waitForSignedSeal(
+	executeFunctions: IExecuteFunctions,
+	itemIndex: number,
+	envelope: AllowlyReceiptEnvelope,
+	pollDelayMs = 1_000,
+): Promise<Record<string, unknown>> {
+	let current = envelope;
+	let expectedReceiptId: string | null = null;
+	while (current.status === 'pending') {
+		if (typeof current.receipt_id !== 'string' || !current.receipt_id) {
+			throw new NodeOperationError(
+				executeFunctions.getNode(),
+				'Allowly returned a pending seal without a receipt ID.',
+				{ itemIndex },
+			);
+		}
+		if (expectedReceiptId === null) expectedReceiptId = current.receipt_id;
+		else if (current.receipt_id !== expectedReceiptId) {
+			throw new NodeOperationError(
+				executeFunctions.getNode(),
+				'Allowly changed the receipt ID while the seal was pending.',
+				{ itemIndex },
+			);
+		}
+		current = (await executeFunctions.helpers.httpRequestWithAuthentication.call(
+			executeFunctions,
+			'allowlyApi',
+			{
+				method: 'GET',
+				url: `${API_URL}/v1/receipts/${encodeURIComponent(expectedReceiptId)}`,
+				json: true,
+			},
+		)) as AllowlyReceiptEnvelope;
+		if (current.status === 'pending' && pollDelayMs > 0) {
+			await sleep(pollDelayMs);
+		}
+	}
+	const receipt = signedReceipt(current);
+	if (!receipt) {
+		throw new NodeOperationError(
+			executeFunctions.getNode(),
+			'Allowly did not return a signed seal receipt.',
+			{ itemIndex },
+		);
+	}
+	if (
+		typeof receipt.receipt_id !== 'string' ||
+		!receipt.receipt_id ||
+		(expectedReceiptId !== null && receipt.receipt_id !== expectedReceiptId)
+	) {
+		throw new NodeOperationError(
+			executeFunctions.getNode(),
+			'Signed seal receipt ID does not match the requested receipt.',
+			{ itemIndex },
+		);
+	}
+	return receipt;
+}
+
+async function authenticatedWorkspaceKeys(
+	executeFunctions: IExecuteFunctions,
+	itemIndex: number,
+	expectedWorkspaceId: string,
+): Promise<{ document: KeyDocument; keys: PublicKey[]; fingerprints: string[] }> {
+	const document = (await executeFunctions.helpers.httpRequestWithAuthentication.call(
+		executeFunctions,
+		'allowlyApi',
+		{
+			method: 'GET',
+			url: `${API_URL}/v1/workspaces/${encodeURIComponent(expectedWorkspaceId)}/keys`,
+			json: true,
+		},
+	)) as KeyDocument;
+	if (document.workspace_id !== expectedWorkspaceId) {
+		throw new NodeOperationError(
+			executeFunctions.getNode(),
+			'Allowly returned keys for a different workspace.',
+			{ itemIndex },
+		);
+	}
+	const keys = sealVerifier.loadKeysFromJson(document);
+	return {
+		document,
+		keys,
+		fingerprints: keys.map(sealVerifier.publicKeyFingerprint),
+	};
+}
+
+function parseSealEnvelope(value: unknown): AllowlyReceiptEnvelope {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) {
+		return {};
+	}
+	const object = value as Record<string, unknown>;
+	if (object.status === 'signed' || object.status === 'pending') {
+		return object as AllowlyReceiptEnvelope;
+	}
+	return { status: 'signed', receipt: object };
+}
 
 function parseActions(value: string): string[] {
 	return Array.from(
@@ -93,6 +266,49 @@ export function parseContext(value: unknown, executeFunctions: IExecuteFunctions
 	return parsed as Record<string, unknown>;
 }
 
+function parseSealMetadata(
+	value: unknown,
+	executeFunctions: IExecuteFunctions,
+	itemIndex: number,
+): Record<string, string> | undefined {
+	let parsed = value;
+	if (typeof value === 'string') {
+		const raw = value.trim();
+		if (!raw) return undefined;
+		try {
+			parsed = JSON.parse(raw);
+		} catch (error) {
+			throw new NodeOperationError(
+				executeFunctions.getNode(),
+				`Metadata JSON is invalid: ${(error as Error).message}`,
+				{ itemIndex },
+			);
+		}
+	}
+	if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+		throw new NodeOperationError(executeFunctions.getNode(), 'Metadata must be an object.', {
+			itemIndex,
+		});
+	}
+	const entries = Object.entries(parsed as Record<string, unknown>);
+	if (entries.length === 0) return undefined;
+	if (entries.length > 8) {
+		throw new NodeOperationError(executeFunctions.getNode(), 'Metadata supports at most 8 entries.', {
+			itemIndex,
+		});
+	}
+	for (const [key, item] of entries) {
+		if (!key || key.length > 64 || typeof item !== 'string' || item.length > 256) {
+			throw new NodeOperationError(
+				executeFunctions.getNode(),
+				'Metadata keys must be 1-64 characters and values must be strings up to 256 characters.',
+				{ itemIndex },
+			);
+		}
+	}
+	return Object.fromEntries(entries) as Record<string, string>;
+}
+
 export function parseEstimatedCostMicros(
 	value: unknown,
 	executeFunctions: IExecuteFunctions,
@@ -130,7 +346,7 @@ export class Allowly implements INodeType {
 		group: ['transform'],
 		version: 1,
 		subtitle: '={{$parameter["operation"]}}',
-		description: 'Create authorizations, check actions, and settle budget estimates with Allowly.',
+		description: 'Seal and verify JSON records, create authorizations, and check actions with Allowly.',
 		defaults: {
 			name: 'Allowly',
 		},
@@ -174,13 +390,102 @@ export class Allowly implements INodeType {
 						action: 'Resolve an escalation',
 					},
 					{
+						name: 'Seal JSON Record',
+						value: 'seal',
+						description: 'Hash a JSON record locally, request a seal, and wait for its signature',
+						action: 'Seal a JSON record',
+					},
+					{
 						name: 'Settle Budget',
 						value: 'settleBudget',
 						description: 'Report the actual cost of a budgeted check',
 						action: 'Settle a budget estimate',
 					},
+					{
+						name: 'Verify JSON Seal',
+						value: 'verifySeal',
+						description: 'Verify the signature and compare a JSON record locally',
+						action: 'Verify a JSON seal',
+					},
 				],
 				default: 'check',
+			},
+			{
+				displayName: 'JSON Input',
+				name: 'sealRecordInputMode',
+				type: 'options',
+				noDataExpression: true,
+				options: [
+					{
+						name: 'Parsed Value',
+						value: 'value',
+						description: 'Use an n8n JSON value. Original number spelling and duplicate keys are already lost.',
+					},
+					{
+						name: 'Raw JSON Text',
+						value: 'rawJson',
+						description: 'Validate raw JSON before parsing, including duplicate keys and number precision',
+					},
+				],
+				default: 'value',
+				displayOptions: { show: { operation: ['seal', 'verifySeal'] } },
+			},
+			{
+				displayName: 'JSON Record',
+				name: 'sealRecordValue',
+				type: 'json',
+				default: '={{$json}}',
+				required: true,
+				description: 'Record hashed inside n8n. The record is not sent to Allowly.',
+				displayOptions: {
+					show: { operation: ['seal', 'verifySeal'], sealRecordInputMode: ['value'] },
+				},
+			},
+			{
+				displayName: 'Raw JSON Text',
+				name: 'sealRecordJson',
+				type: 'string',
+				typeOptions: { rows: 8 },
+				default: '',
+				required: true,
+				description: 'Raw UTF-8 JSON text hashed inside n8n. It is not sent to Allowly.',
+				displayOptions: {
+					show: { operation: ['seal', 'verifySeal'], sealRecordInputMode: ['rawJson'] },
+				},
+			},
+			{
+				displayName: 'Request ID',
+				name: 'sealRequestId',
+				type: 'string',
+				default: '',
+				description: 'Optional stable retry ID. Defaults to this n8n execution, node, and item.',
+				displayOptions: { show: { operation: ['seal'] } },
+			},
+			{
+				displayName: 'Metadata',
+				name: 'sealMetadata',
+				type: 'json',
+				default: '{}',
+				description: 'Optional object of up to eight short string values copied into the signed seal',
+				displayOptions: { show: { operation: ['seal'] } },
+			},
+			{
+				displayName: 'Signed Seal Receipt',
+				name: 'sealReceipt',
+				type: 'json',
+				default: '={{$json.receipt}}',
+				required: true,
+				description: 'A signed receipt object or signed receipt envelope from Allowly',
+				displayOptions: { show: { operation: ['verifySeal'] } },
+			},
+			{
+				displayName: 'Expected Workspace ID',
+				name: 'sealExpectedWorkspaceId',
+				type: 'string',
+				default: '',
+				required: true,
+				description: 'Trusted workspace ID saved from the authenticated sealing workflow',
+				displayOptions: { show: { operation: ['verifySeal'] } },
 			},
 			{
 				displayName: 'Policy ID',
@@ -478,6 +783,129 @@ export class Allowly implements INodeType {
 					this.getNode().name,
 					itemIndex,
 				);
+
+				if (operation === 'seal') {
+					const input = recordInput(this, itemIndex);
+					const digest = await recordSha256(input);
+					const requestId =
+						(this.getNodeParameter('sealRequestId', itemIndex) as string).trim() || idempotencyKey;
+					const metadata = parseSealMetadata(
+						this.getNodeParameter('sealMetadata', itemIndex),
+						this,
+						itemIndex,
+					);
+					const { SEAL_PROFILE } = sealVerifier;
+					const body: Record<string, unknown> = {
+						request_id: requestId,
+						profile: SEAL_PROFILE,
+						record_sha256: digest,
+					};
+					if (metadata) body.metadata = metadata;
+					const sealResponse = (await this.helpers.httpRequestWithAuthentication.call(
+						this,
+						'allowlyApi',
+						{
+							method: 'POST',
+							url: `${API_URL}/v1/seal`,
+							headers: { 'Content-Type': 'application/json' },
+							body,
+							json: true,
+						},
+					)) as AllowlySealResponse;
+					if (
+						sealResponse.request_id !== requestId ||
+						sealResponse.decision !== 'allow' ||
+						sealResponse.profile !== SEAL_PROFILE ||
+						sealResponse.record_sha256 !== digest ||
+						typeof sealResponse.workspace_id !== 'string' ||
+						!sealResponse.workspace_id ||
+						!sealResponse.receipt
+					) {
+						throw new NodeOperationError(
+							this.getNode(),
+							'Allowly returned an invalid seal response.',
+							{ itemIndex },
+						);
+					}
+					const workspaceId = sealResponse.workspace_id;
+					const receipt = await waitForSignedSeal(this, itemIndex, sealResponse.receipt);
+					const trustedKeys = await authenticatedWorkspaceKeys(this, itemIndex, workspaceId);
+					const verification = await verifyRecord(input, receipt, trustedKeys.keys, workspaceId);
+					if (!verification.signatureVerified || !verification.recordMatches) {
+						throw new NodeOperationError(
+							this.getNode(),
+							`Signed seal failed local verification: ${verification.failureReason ?? 'unknown error'}.`,
+							{ itemIndex },
+						);
+					}
+					returnData.push({
+						json: {
+							sealed: true,
+							signatureVerified: true,
+							recordMatches: true,
+							requestId,
+							profile: SEAL_PROFILE,
+							recordSha256: digest,
+							workspaceId,
+							recordedAt: receipt.issued_at,
+							receipt,
+							keysDocument: trustedKeys.document,
+							trustedKeyFingerprints: trustedKeys.fingerprints,
+							...(input.kind === 'json'
+								? { recordJson: input.value }
+								: { record: input.value }),
+						} as IDataObject,
+						pairedItem: { item: itemIndex },
+					});
+					continue;
+				}
+
+				if (operation === 'verifySeal') {
+					const input = recordInput(this, itemIndex);
+					const expectedWorkspaceId = (
+						this.getNodeParameter('sealExpectedWorkspaceId', itemIndex) as string
+					).trim();
+					if (!expectedWorkspaceId) {
+						throw new NodeOperationError(this.getNode(), 'Expected Workspace ID is required.', {
+							itemIndex,
+						});
+					}
+					const envelope = parseSealEnvelope(this.getNodeParameter('sealReceipt', itemIndex));
+					const receipt = await waitForSignedSeal(this, itemIndex, envelope);
+					const trustedKeys = await authenticatedWorkspaceKeys(
+						this,
+						itemIndex,
+						expectedWorkspaceId,
+					);
+					const verification = await verifyRecord(
+						input,
+						receipt,
+						trustedKeys.keys,
+						expectedWorkspaceId,
+					);
+					if (!verification.signatureVerified || !verification.recordMatches) {
+						throw new NodeOperationError(
+							this.getNode(),
+							`SEAL verification failed: ${verification.failureReason ?? 'unknown error'}.`,
+							{ itemIndex },
+						);
+					}
+					returnData.push({
+						json: {
+							verified: verification.signatureVerified && verification.recordMatches,
+							signatureVerified: verification.signatureVerified,
+							recordMatches: verification.recordMatches,
+							failureReason: verification.failureReason,
+							expectedWorkspaceId,
+							recordedAt: receipt.issued_at,
+							receipt,
+							keysDocument: trustedKeys.document,
+							trustedKeyFingerprints: trustedKeys.fingerprints,
+						} as IDataObject,
+						pairedItem: { item: itemIndex },
+					});
+					continue;
+				}
 
 				if (operation === 'createAuthorization') {
 					const policyId = (this.getNodeParameter('policyId', itemIndex) as string).trim();

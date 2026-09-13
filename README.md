@@ -2,7 +2,7 @@
 
 Community n8n node for Allowly.
 
-Use it to create an Allowly authorization from an agent policy, check that authorization before an AI-agent, tool, or automation step runs, and settle budget estimates after the action finishes. The node returns Allowly responses without interpreting receipts.
+Use it to seal and verify JSON records, or to authorize and check an AI-agent, tool, or automation step. SEAL hashes the record inside n8n, sends only the fingerprint and optional short metadata to Allowly, waits for the signer, and verifies the signed receipt before it reports success.
 
 ## Install in n8n
 
@@ -19,6 +19,38 @@ n8n-nodes-allowly
 No n8n marketplace approval is needed for this first path. npm publication is enough for self-service community-node installation.
 
 ## Operations
+
+### Seal JSON Record
+
+Choose **Parsed Value** for ordinary n8n objects or **Raw JSON Text** when you still have the original JSON text. Raw mode checks duplicate decoded keys, malformed Unicode, number overflow, underflow, and precision loss before parsing. Parsed values have already lost duplicate keys and original number spelling.
+
+The node applies the versioned `allowly.seal.jcs-sha256.v1` profile: RFC 8785 JSON Canonicalization Scheme (JCS), then SHA-256. It calls:
+
+```http
+POST /v1/seal
+Authorization: Bearer allowly_l1_s001_...
+```
+
+```json
+{
+  "request_id": "n8n:...",
+  "profile": "allowly.seal.jcs-sha256.v1",
+  "record_sha256": "64-lowercase-hex-characters",
+  "metadata": {
+    "source": "n8n"
+  }
+}
+```
+
+The original record is not in this request. The operation polls Allowly's fixed receipt endpoint while signing is pending. It reports `sealed: true` only after stock wire-4 signature verification and SEAL-specific record, workspace, action, decision, profile, and identity checks all pass. A seal records that Allowly authorized and signed this fingerprint at its recorded `issued_at` time. It does not prove an external action happened or independently prove the time.
+
+No policy or authorization setup is required. One seal uses one decision from the workspace's existing allowance. The Free plan currently includes 1,000 lifetime decisions.
+
+### Verify JSON Seal
+
+Supply the original JSON, the full signed receipt, and the expected workspace ID retained from the authenticated sealing run. The node obtains that workspace's keys from the fixed Allowly API origin and reports signature verification and record matching separately. A changed record can therefore return `signatureVerified: true` with `recordMatches: false`.
+
+Keep the original JSON, full receipt, workspace ID, key document, and trusted key fingerprints together. Hosted receipt and key availability is not permanent; the evidence can be verified offline later with retained trusted key material.
 
 ### Create Authorization
 
@@ -88,8 +120,17 @@ Report an approved or rejected escalation using its `escalation_id`. **Resolved 
 - **API Key**: Allowly API key used to call the API. Keep it server-side.
 - **User ID Pepper**: optional encrypted credential used by **Mask Email Locally**. Back it up; changing it changes derived user IDs.
 
-Use an Allowly runtime key. Credential validation calls the runtime-scoped `GET /v1/authorizations` endpoint.
+Use an Allowly runtime key. SEAL uses the key's workspace and never accepts a caller-supplied workspace identity. Credential validation calls the runtime-scoped `GET /v1/authorizations` endpoint.
 All requests use the hosted Allowly API at `https://api.allowly.ai`.
+
+### SEAL fields
+
+- **JSON Input**: parsed n8n value or original raw JSON text.
+- **JSON Record / Raw JSON Text**: record hashed locally, with a 1 MiB UTF-8 limit and maximum nesting depth of 32.
+- **Request ID**: stable retry ID. Reusing it with the same fingerprint and profile returns the original logical seal; changing the content conflicts. A new ID creates a new seal.
+- **Metadata**: optional object of up to eight short string values copied into the signed context. Do not put secrets or raw records in metadata.
+- **Signed Seal Receipt**: full signed wire-4 receipt or Allowly receipt envelope to verify.
+- **Expected Workspace ID**: caller-trusted workspace retained from the authenticated sealing flow.
 
 ### Create Authorization fields
 
@@ -136,6 +177,42 @@ The raw email is not sent to Allowly and is not included in the node output. The
 More: [PII-safe identifiers](https://allowly.ai/docs/sdk/identifiers/).
 
 ## Output
+
+### Seal output
+
+```json
+{
+  "sealed": true,
+  "signatureVerified": true,
+  "recordMatches": true,
+  "requestId": "n8n:...",
+  "profile": "allowly.seal.jcs-sha256.v1",
+  "recordSha256": "...",
+  "workspaceId": "ws_...",
+  "recordedAt": "2026-09-12T14:32:00.000Z",
+  "receipt": {},
+  "keysDocument": {},
+  "trustedKeyFingerprints": [],
+  "record": {}
+}
+```
+
+Raw JSON mode returns `recordJson` instead of `record` so the original text can be archived.
+
+### Verify SEAL output
+
+```json
+{
+  "verified": false,
+  "signatureVerified": true,
+  "recordMatches": false,
+  "failureReason": "record_mismatch",
+  "expectedWorkspaceId": "ws_...",
+  "receipt": {},
+  "keysDocument": {},
+  "trustedKeyFingerprints": []
+}
+```
 
 ### Create Authorization output
 
