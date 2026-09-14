@@ -2,7 +2,7 @@
 
 Community n8n node for Allowly.
 
-Use it to seal and verify JSON records, or to authorize and check an AI-agent, tool, or automation step. SEAL hashes the record inside n8n, sends only the fingerprint and optional short metadata to Allowly, waits for the signer, and verifies the signed receipt before it reports success.
+Use it to seal and verify JSON records, or to authorize and check an AI agent, tool, or automation step. The default SEAL flow needs only the private webhook URL copied from the Allowly dashboard. Map JSON into the node and it returns portable signed evidence.
 
 ## Install in n8n
 
@@ -20,37 +20,40 @@ No n8n marketplace approval is needed for this first path. npm publication is en
 
 ## Operations
 
-### Seal JSON Record
+### Seal JSON with Managed Webhook
 
-Choose **Parsed Value** for ordinary n8n objects or **Raw JSON Text** when you still have the original JSON text. Raw mode checks duplicate decoded keys, malformed Unicode, number overflow, underflow, and precision loss before parsing. Parsed values have already lost duplicate keys and original number spelling.
+1. Open **SEAL** in the Allowly dashboard and copy the private webhook URL.
+2. In n8n, create an **Allowly SEAL Webhook API** credential and paste that URL into **Private Webhook URL**.
+3. Choose **Seal JSON with Managed Webhook** and map the JSON record.
+4. Run the node and save its receipt, key document, workspace ID, and original record.
 
-The node applies the versioned `allowly.seal.jcs-sha256.v1` profile: RFC 8785 JSON Canonicalization Scheme (JCS), then SHA-256. It calls:
+No ordinary API key, policy, authorization, or local hashing step is required. The node sends the complete JSON record to the private webhook as the raw request body. Allowly hashes it in memory and does not retain the original record. The node keeps the mapped value in its output as `record`, or preserves exact input text as `recordJson` in **Raw JSON Text** mode.
 
-```http
-POST /v1/seal
-Authorization: Bearer allowly_l1_s001_...
-```
+Choose **Parsed Value** for ordinary n8n objects. Choose **Raw JSON Text** when exact number spelling, duplicate keys, and other byte-level details matter. Allowly applies the versioned `allowly.seal.jcs-sha256.v1` profile and rejects malformed or unsafe JSON.
 
-```json
-{
-  "request_id": "n8n:...",
-  "profile": "allowly.seal.jcs-sha256.v1",
-  "record_sha256": "64-lowercase-hex-characters",
-  "metadata": {
-    "source": "n8n"
-  }
-}
-```
+**Wait for Signature** is bounded from 0 to 300 seconds and defaults to 120. A `200` or `202` webhook response confirms only the current delivery state. The node reports `sealed: true` after it retrieves the signed receipt and keys and verifies both the signature and original record. If signing is still running when the wait ends, it returns `pending: true` with an `attemptId`.
 
-The original record is not in this request. The operation polls Allowly's fixed receipt endpoint while signing is pending. It reports `sealed: true` only after stock wire-4 signature verification and SEAL-specific record, workspace, action, decision, profile, and identity checks all pass. A seal records that Allowly authorized and signed this fingerprint at its recorded `issued_at` time. It does not prove an external action happened or independently prove the time.
+Set **Idempotency Key** to a stable sender event ID when the upstream system has one. A retry with the same key and exact JSON recovers the same attempt. Reusing the key with changed JSON returns a conflict. If the field is blank, the node derives a stable key from the n8n execution, node, and item.
 
-No policy or authorization setup is required. One seal uses one decision from the workspace's existing allowance. The Free plan currently includes 1,000 lifetime decisions.
+The private URL is an encrypted n8n credential. The node never adds it or any token-bearing status, receipt, or keys URL to workflow output or customer-facing errors. Credential testing performs a scoped `GET`; it never creates a seal.
 
-### Verify JSON Seal
+### Retrieve Managed Webhook Seal
 
-Supply the original JSON, the full signed receipt, and the expected workspace ID retained from the authenticated sealing run. The node obtains that workspace's keys from the fixed Allowly API origin. It returns a verified result only when both the signature and record match. A changed record raises `SEAL verification failed: record_mismatch`.
+Use **Retrieve Managed Webhook Seal** after a pending result. Map its `attemptId` and the same original `recordJson` or `record`, then use the same private webhook credential. The node waits for the selected bounded period, retrieves the receipt and keys through trusted credential-derived routes, and verifies the evidence. It returns another pending result if signing still has not finished.
 
-Keep the original JSON, full receipt, workspace ID, key document, and trusted key fingerprints together. Hosted receipt and key availability is not permanent; the evidence can be verified offline later with retained trusted key material.
+### Verify Saved JSON Seal
+
+Use **Verify Saved JSON Seal** with the original JSON, signed receipt, saved key document, and expected workspace ID. This operation makes no network request and needs no API key or active webhook. It uses the same bundled Allowly verifier as the other SEAL operations and fails the workflow if the signature, record, or workspace does not match.
+
+Keep the original JSON, full receipt, workspace ID, key document, and trusted key fingerprints together. Hosted receipt and key availability is not permanent.
+
+### Seal JSON Record (API Key)
+
+The earlier direct API operation remains available for existing workflows. It hashes the record inside n8n, sends the fingerprint and optional short metadata to `POST /v1/seal` with an Allowly runtime API key, waits for signing, and verifies the receipt before returning success. It does not send the original JSON to Allowly.
+
+### Verify JSON Seal (API Key)
+
+The earlier API-key verification operation also remains available. Supply the original JSON, full signed receipt, and expected workspace ID. The node retrieves workspace keys from the fixed Allowly API origin, then verifies the signature and record locally.
 
 ### Create Authorization
 
@@ -117,15 +120,23 @@ Report an approved or rejected escalation using its `escalation_id`. **Resolved 
 
 ### Credential fields
 
-- **API Key**: Allowly API key used to call the API. Keep it server-side.
-- **User ID Pepper**: optional encrypted credential used by **Mask Email Locally**. Back it up; changing it changes derived user IDs.
+- **Allowly SEAL Webhook API / Private Webhook URL**: the complete private URL copied from the dashboard. This is the only credential needed for managed sealing and retrieval. Treat it like a password.
+- **Allowly API / API Key**: Allowly runtime key used by the older direct SEAL operations and authorization operations.
+- **Allowly API / User ID Pepper**: optional encrypted value used only by **Mask Email Locally**. Back it up; changing it changes derived user IDs.
 
-Use an Allowly runtime key. SEAL uses the key's workspace and never accepts a caller-supplied workspace identity. Credential validation calls the runtime-scoped `GET /v1/authorizations` endpoint.
-All requests use the hosted Allowly API at `https://api.allowly.ai`.
+Production webhook credentials must use the hosted Allowly API at `https://api.allowly.ai`. For local development only, enable **Allow Local Development URL** on the credential to accept a private URL on `localhost`, `127.0.0.1`, or `::1`. When n8n SSRF protection is enabled, keep `N8N_SSRF_PROTECTION_ENABLED=true` and add only the loopback hostname in use, such as `N8N_SSRF_ALLOWED_HOSTNAMES=localhost`. These advanced settings are not part of customer credential setup.
 
-### SEAL fields
+### Managed SEAL fields
 
 - **JSON Input**: parsed n8n value or original raw JSON text.
+- **JSON Record / Raw JSON Text**: the complete record. **Seal JSON with Managed Webhook** sends it to Allowly for in-memory hashing. Retrieval and verification compare it locally without sending it again. The webhook enforces a 1 MiB UTF-8 limit and maximum nesting depth of 32.
+- **Idempotency Key**: optional stable sender event ID. Reusing it with the same JSON recovers the original attempt; changing the JSON conflicts.
+- **Wait for Signature**: maximum time to poll, from 0 to 300 seconds. A timeout returns a pending result rather than claiming the record is sealed.
+- **Attempt ID**: opaque ID from a pending result, used by **Retrieve Managed Webhook Seal**.
+- **Signed Seal Receipt**, **Saved Key Document**, and **Expected Workspace ID**: retained evidence used by **Verify Saved JSON Seal** without a credential or network request.
+
+### API-key SEAL fields
+
 - **JSON Record / Raw JSON Text**: record hashed locally, with a 1 MiB UTF-8 limit and maximum nesting depth of 32.
 - **Request ID**: stable retry ID. Reusing it with the same fingerprint and profile returns the original logical seal; changing the content conflicts. A new ID creates a new seal.
 - **Metadata**: optional object of up to eight short string values copied into the signed context. Do not put secrets or raw records in metadata.
@@ -178,17 +189,20 @@ More: [PII-safe identifiers](https://allowly.ai/docs/sdk/identifiers/).
 
 ## Output
 
-### Seal output
+### Managed SEAL output
 
 ```json
 {
+  "attemptId": "swd_...",
+  "workspaceId": "ws_...",
+  "status": "sealed",
   "sealed": true,
+  "pending": false,
   "signatureVerified": true,
   "recordMatches": true,
-  "requestId": "n8n:...",
   "profile": "allowly.seal.jcs-sha256.v1",
   "recordSha256": "...",
-  "workspaceId": "ws_...",
+  "receiptId": "rcp_...",
   "recordedAt": "2026-09-12T14:32:00.000Z",
   "receipt": {},
   "keysDocument": {},
@@ -198,6 +212,12 @@ More: [PII-safe identifiers](https://allowly.ai/docs/sdk/identifiers/).
 ```
 
 Raw JSON mode returns `recordJson` instead of `record` so the original text can be archived.
+
+If signing is still running, `sealed` is `false`, `pending` is `true`, and the signed evidence fields are `null`. Map `attemptId` and the original record into **Retrieve Managed Webhook Seal**. No output contains the private webhook URL or a token-bearing URL.
+
+### API-key Seal output
+
+The older **Seal JSON Record (API Key)** operation returns the same portable evidence fields with its direct `requestId` instead of a webhook `attemptId`.
 
 ### Verify SEAL output
 

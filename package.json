@@ -50,7 +50,8 @@
     "n8nNodesApiVersion": 1,
     "strict": true,
     "credentials": [
-      "dist/credentials/AllowlyApi.credentials.js"
+      "dist/credentials/AllowlyApi.credentials.js",
+      "dist/credentials/AllowlySealWebhookApi.credentials.js"
     ],
     "nodes": [
       "dist/nodes/Allowly/Allowly.node.js"
