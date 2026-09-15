@@ -65,6 +65,8 @@ type AllowlySealResponse = {
 
 type AllowlySealWebhookStatus = 'received' | 'signing' | 'sealed' | 'rejected' | 'failed';
 
+type AllowlySealMetadata = Record<string, string>;
+
 type AllowlySealWebhookDelivery = {
 	attemptId: string;
 	workspaceId: string;
@@ -73,6 +75,7 @@ type AllowlySealWebhookDelivery = {
 	updatedAt: string;
 	profile: string;
 	recordSha256: string | null;
+	metadata: AllowlySealMetadata | null;
 	receiptId: string | null;
 	errorCode: string | null;
 	receipt: Record<string, unknown> | null;
@@ -108,6 +111,12 @@ const SEAL_WEBHOOK_POLL_DELAY_MS = 1_000;
 const SEAL_WEBHOOK_REQUEST_TIMEOUT_MS = 15_000;
 
 const SEAL_WEBHOOK_MAX_RETRY_AFTER_SECONDS = 5;
+
+const SEAL_WEBHOOK_DETAIL_PARAMETERS = [
+	['sealWebhookType', 'Allowly-Seal-Type', 'Type'],
+	['sealWebhookReference', 'Allowly-Seal-Reference', 'Reference'],
+	['sealWebhookStatement', 'Allowly-Seal-Statement', 'Statement'],
+] as const;
 
 const LEGACY_OPERATION_OPTIONS: INodePropertyOptions[] = [
 	{
@@ -450,6 +459,10 @@ function isLoopbackHost(hostname: string): boolean {
 	return ['localhost', '127.0.0.1', '[::1]', '::1'].includes(hostname.toLowerCase());
 }
 
+function hasUnpairedSurrogate(value: string): boolean {
+	return /[\ud800-\udfff]/.test(value.replace(/[\ud800-\udbff][\udc00-\udfff]/g, ''));
+}
+
 export function parseSealWebhookUrl(
 	value: unknown,
 	allowLocalDevelopmentUrl = false,
@@ -558,6 +571,37 @@ function sealWebhookIdempotencyKey(
 	return key;
 }
 
+function sealWebhookDetailHeaders(
+	executeFunctions: IExecuteFunctions,
+	itemIndex: number,
+): IDataObject {
+	const headers: IDataObject = {};
+	for (const [parameter, header, label] of SEAL_WEBHOOK_DETAIL_PARAMETERS) {
+		const value = executeFunctions.getNodeParameter(parameter, itemIndex);
+		if (value === undefined || value === null || value === '') continue;
+		if (typeof value !== 'string') {
+			throw new NodeOperationError(
+				executeFunctions.getNode(),
+				`${label} must be a string.`,
+				{ itemIndex },
+			);
+		}
+		if (
+			value.length > 256 ||
+			value !== value.trim() ||
+			/[^\x20-\x7e]/.test(value)
+		) {
+			throw new NodeOperationError(
+				executeFunctions.getNode(),
+				`${label} must be at most 256 printable ASCII characters with no outer whitespace.`,
+				{ itemIndex },
+			);
+		}
+		headers[header] = value;
+	}
+	return headers;
+}
+
 function responseHeader(headers: Record<string, unknown>, name: string): string | null {
 	const entry = Object.entries(headers).find(([key]) => key.toLowerCase() === name.toLowerCase());
 	if (!entry) return null;
@@ -621,9 +665,9 @@ async function sealWebhookRequest(
 	path: string,
 	method: 'GET' | 'POST',
 	expectedStatuses: number[],
-	options: { body?: Buffer; idempotencyKey?: string } = {},
+	options: { body?: Buffer; headers?: IDataObject; idempotencyKey?: string } = {},
 ): Promise<unknown> {
-	const headers: IDataObject = {};
+	const headers: IDataObject = { ...options.headers };
 	if (method === 'POST') headers['Content-Type'] = 'application/json';
 	if (options.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey;
 
@@ -729,6 +773,51 @@ function optionalWebhookString(
 	return item;
 }
 
+function sealWebhookMetadata(
+	value: unknown,
+	executeFunctions: IExecuteFunctions,
+	itemIndex: number,
+): AllowlySealMetadata | null {
+	if (value === undefined || value === null) return null;
+	if (!isRecord(value) || Object.keys(value).length > 8) {
+		throw new NodeOperationError(
+			executeFunctions.getNode(),
+			'Allowly SEAL webhook response has invalid metadata.',
+			{ itemIndex },
+		);
+	}
+	const entries: Array<[string, string]> = [];
+	for (const [key, item] of Object.entries(value)) {
+		if (
+			![...key].length ||
+			[...key].length > 64 ||
+			typeof item !== 'string' ||
+			[...item].length > 256 ||
+			key.includes('\0') ||
+			item.includes('\0') ||
+			hasUnpairedSurrogate(key) ||
+			hasUnpairedSurrogate(item)
+		) {
+			throw new NodeOperationError(
+				executeFunctions.getNode(),
+				'Allowly SEAL webhook response has invalid metadata.',
+				{ itemIndex },
+			);
+		}
+		entries.push([key, item]);
+	}
+	return Object.fromEntries(entries);
+}
+
+function sameSealMetadata(
+	left: AllowlySealMetadata | null,
+	right: AllowlySealMetadata | null,
+): boolean {
+	if (left === null || right === null) return left === right;
+	const keys = Object.keys(left);
+	return keys.length === Object.keys(right).length && keys.every((key) => left[key] === right[key]);
+}
+
 function parseSealWebhookDelivery(
 	value: unknown,
 	executeFunctions: IExecuteFunctions,
@@ -772,6 +861,7 @@ function parseSealWebhookDelivery(
 			{ itemIndex },
 		);
 	}
+	let metadata = sealWebhookMetadata(value.metadata, executeFunctions, itemIndex);
 	const rawReceipt = value.receipt;
 	const receipt = rawReceipt === undefined || rawReceipt === null
 		? null
@@ -795,6 +885,22 @@ function parseSealWebhookDelivery(
 			{ itemIndex },
 		);
 	}
+	if (receipt !== null) {
+		const context = isRecord(receipt.context) ? receipt.context : {};
+		const signedMetadata = sealWebhookMetadata(
+			context.seal_metadata,
+			executeFunctions,
+			itemIndex,
+		);
+		if (metadata !== null && !sameSealMetadata(metadata, signedMetadata)) {
+			throw new NodeOperationError(
+				executeFunctions.getNode(),
+				'Allowly SEAL webhook returned metadata that does not match the signed receipt.',
+				{ itemIndex },
+			);
+		}
+		metadata = signedMetadata;
+	}
 	const errorCode = optionalWebhookString(value, 'error_code', executeFunctions, itemIndex);
 	return {
 		attemptId,
@@ -804,6 +910,7 @@ function parseSealWebhookDelivery(
 		updatedAt: requiredWebhookString(value, 'updated_at', executeFunctions, itemIndex),
 		profile,
 		recordSha256: optionalWebhookString(value, 'record_sha256', executeFunctions, itemIndex),
+		metadata,
 		receiptId,
 		errorCode:
 			errorCode !== null && /^[a-z0-9_]{1,64}$/.test(errorCode) ? errorCode : null,
@@ -822,6 +929,7 @@ async function waitForSealWebhookDelivery(
 	let receiptId = current.receiptId;
 	const deadline = Date.now() + waitSeconds * 1_000;
 	while (['received', 'signing'].includes(current.status) && Date.now() < deadline) {
+		const previousMetadata = current.metadata;
 		await sleep(Math.min(SEAL_WEBHOOK_POLL_DELAY_MS, deadline - Date.now()));
 		const value = await sealWebhookRequest(
 			executeFunctions,
@@ -842,6 +950,13 @@ async function waitForSealWebhookDelivery(
 			throw new NodeOperationError(
 				executeFunctions.getNode(),
 				'Allowly SEAL webhook changed the workspace while signing.',
+				{ itemIndex },
+			);
+		}
+		if (previousMetadata !== null && !sameSealMetadata(previousMetadata, current.metadata)) {
+			throw new NodeOperationError(
+				executeFunctions.getNode(),
+				'Allowly changed SEAL receipt details while signing.',
 				{ itemIndex },
 			);
 		}
@@ -905,6 +1020,7 @@ async function sealWebhookEvidence(
 		status: delivery.status,
 		profile: delivery.profile,
 		recordSha256: delivery.recordSha256,
+		metadata: delivery.metadata,
 		receiptId: delivery.receiptId,
 		receivedAt: delivery.receivedAt,
 		updatedAt: delivery.updatedAt,
@@ -963,6 +1079,14 @@ async function sealWebhookEvidence(
 				{ itemIndex },
 			);
 		}
+		if (delivery.metadata !== null && !sameSealMetadata(delivery.metadata, receiptDelivery.metadata)) {
+			throw new NodeOperationError(
+				executeFunctions.getNode(),
+				'Allowly changed SEAL receipt details while retrieving evidence.',
+				{ itemIndex },
+			);
+		}
+		delivery.metadata = receiptDelivery.metadata;
 		receipt = receiptDelivery.receipt;
 	}
 	if (receipt === null) {
@@ -1224,12 +1348,36 @@ export class Allowly implements INodeType {
 				},
 			},
 			{
+				displayName: 'Type',
+				name: 'sealWebhookType',
+				type: 'string',
+				default: '',
+				description: 'Optional printable ASCII record type copied into the signed receipt, for example invoice',
+				displayOptions: { show: { operation: ['sealWebhook'] } },
+			},
+			{
+				displayName: 'Reference',
+				name: 'sealWebhookReference',
+				type: 'string',
+				default: '',
+				description: 'Optional printable ASCII customer reference copied into the signed receipt and available for exact search',
+				displayOptions: { show: { operation: ['sealWebhook'] } },
+			},
+			{
+				displayName: 'Statement',
+				name: 'sealWebhookStatement',
+				type: 'string',
+				default: '',
+				description: 'Optional printable ASCII customer statement copied into the signed receipt',
+				displayOptions: { show: { operation: ['sealWebhook'] } },
+			},
+			{
 				displayName: 'Idempotency Key',
 				name: 'sealWebhookIdempotencyKey',
 				type: 'string',
 				default: '',
 				description:
-					'Optional stable sender event ID. Defaults to this n8n execution, node, and item. Reuse it only for the same JSON.',
+					'Optional stable sender event ID. Defaults to this n8n execution, node, and item. Reuse it only for the same JSON and receipt details.',
 				displayOptions: { show: { operation: ['sealWebhook'] } },
 			},
 			{
@@ -1616,6 +1764,7 @@ export class Allowly implements INodeType {
 
 					let delivery: AllowlySealWebhookDelivery;
 					if (operation === 'sealWebhook') {
+						const detailHeaders = sealWebhookDetailHeaders(this, itemIndex);
 						const senderId = sealWebhookIdempotencyKey(
 							this.getNodeParameter('sealWebhookIdempotencyKey', itemIndex),
 							idempotencyKey,
@@ -1631,6 +1780,7 @@ export class Allowly implements INodeType {
 							[200, 202],
 							{
 								body: Buffer.from(sealWebhookRecordJson(input, this, itemIndex), 'utf8'),
+								headers: detailHeaders,
 								idempotencyKey: senderId,
 							},
 						);

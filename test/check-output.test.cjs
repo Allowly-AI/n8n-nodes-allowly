@@ -447,7 +447,7 @@ function webhookDelivery(fixture, overrides = {}) {
 	const receiptId = overrides.receipt_id === undefined
 		? fixture.receipt.receipt_id
 		: overrides.receipt_id;
-	return {
+	const response = {
 		attempt_id: attemptId,
 		workspace_id: fixture.workspaceId,
 		status: 'sealed',
@@ -455,6 +455,7 @@ function webhookDelivery(fixture, overrides = {}) {
 		updated_at: '2026-09-13T12:00:01.000Z',
 		profile: 'allowly.seal.jcs-sha256.v1',
 		record_sha256: fixture.digest,
+		metadata: null,
 		receipt_id: receiptId,
 		error_code: null,
 		status_url: `https://api.allowly.ai/v1/seal/webhooks/deliveries/${attemptId}?token=${WEBHOOK_TOKEN}`,
@@ -465,6 +466,10 @@ function webhookDelivery(fixture, overrides = {}) {
 		receipt: fixture.receipt,
 		...overrides,
 	};
+	if (!Object.hasOwn(overrides, 'metadata')) {
+		response.metadata = response.receipt?.context?.seal_metadata ?? null;
+	}
+	return response;
 }
 
 function managedWebhookContext(operation, parameters, requestHandler, webhookUrl = WEBHOOK_URL) {
@@ -516,6 +521,16 @@ test('managed webhook is the v2 default while v1 keeps Check', () => {
 	assert.equal(
 		description.credentials.find(({ name }) => name === 'allowlySealWebhookApi').testedBy,
 		'testSealWebhookCredential',
+	);
+	assert.deepEqual(
+		description.properties
+			.filter(({ name }) => ['sealWebhookType', 'sealWebhookReference', 'sealWebhookStatement'].includes(name))
+			.map(({ displayName, name, default: defaultValue }) => [displayName, name, defaultValue]),
+		[
+			['Type', 'sealWebhookType', ''],
+			['Reference', 'sealWebhookReference', ''],
+			['Statement', 'sealWebhookStatement', ''],
+		],
 	);
 });
 
@@ -655,6 +670,9 @@ test('managed webhook sends exact raw JSON bytes and returns verified evidence w
 	assert.deepEqual([...postedUrl.searchParams.entries()], [['token', WEBHOOK_TOKEN]]);
 	assert.equal(post.headers['Idempotency-Key'], 'sender-event-7');
 	assert.equal(post.headers['Content-Type'], 'application/json');
+	assert.equal(post.headers['Allowly-Seal-Type'], undefined);
+	assert.equal(post.headers['Allowly-Seal-Reference'], undefined);
+	assert.equal(post.headers['Allowly-Seal-Statement'], undefined);
 	assert.equal(Buffer.isBuffer(post.body), true);
 	assert.equal(post.body.toString('utf8'), rawJson);
 	assert.equal(Object.hasOwn(post.headers, 'X-Allowly-Seal-Webhook-Token'), false);
@@ -663,6 +681,7 @@ test('managed webhook sends exact raw JSON bytes and returns verified evidence w
 	assert.equal(output[0][0].json.signatureVerified, true);
 	assert.equal(output[0][0].json.recordMatches, true);
 	assert.equal(output[0][0].json.recordJson, rawJson);
+	assert.deepEqual(output[0][0].json.metadata, fixture.receipt.context.seal_metadata);
 	assert.equal(Object.hasOwn(output[0][0].json.keysDocument, 'keys_url'), false);
 	assert.equal(JSON.stringify(output).includes(WEBHOOK_TOKEN), false);
 	assert.equal(JSON.stringify(output).includes('status_url'), false);
@@ -696,6 +715,9 @@ test('managed webhook raw body survives the HTTP client transform unchanged', as
 			{
 				sealRecordInputMode: 'rawJson',
 				sealRecordJson: rawJson,
+				sealWebhookType: 'invoice',
+				sealWebhookReference: 'INV-1042',
+				sealWebhookStatement: 'Approved for payment',
 				sealWebhookIdempotencyKey: 'raw-byte-test',
 				sealWebhookWaitSeconds: 0,
 			},
@@ -721,21 +743,85 @@ test('managed webhook raw body survives the HTTP client transform unchanged', as
 		await assert.rejects(() => new Allowly().execute.call(context), /HTTP 422: seal_invalid_json/);
 		assert.equal(captured.body.toString('utf8'), rawJson);
 		assert.equal(captured.headers['content-type'], 'application/json');
+		assert.equal(captured.headers['allowly-seal-type'], 'invoice');
+		assert.equal(captured.headers['allowly-seal-reference'], 'INV-1042');
+		assert.equal(captured.headers['allowly-seal-statement'], 'Approved for payment');
 		assert.equal(captured.url, `/v1/seal/webhooks?token=${WEBHOOK_TOKEN}`);
 	} finally {
 		await new Promise((resolve) => server.close(resolve));
 	}
 });
 
+test('managed webhook exposes only metadata bound to the signed receipt', async () => {
+	const fixture = await sealFixture();
+	const context = managedWebhookContext(
+		'sealWebhook',
+		{
+			sealRecordInputMode: 'value',
+			sealRecordValue: fixture.record,
+			sealWebhookIdempotencyKey: 'metadata-binding',
+			sealWebhookWaitSeconds: 0,
+		},
+		() => fullHttpResponse(200, webhookDelivery(fixture, {
+			metadata: { statement: 'Unsigned replacement' },
+		})),
+	);
+	await assert.rejects(
+		() => new Allowly().execute.call(context),
+		/metadata that does not match the signed receipt/,
+	);
+});
+
+test('managed webhook rejects detail values that HTTP header normalization would change', async () => {
+	const context = managedWebhookContext(
+		'sealWebhook',
+		{
+			sealRecordInputMode: 'rawJson',
+			sealRecordJson: '{}',
+			sealWebhookStatement: ' padded ',
+			sealWebhookIdempotencyKey: 'detail-validation',
+			sealWebhookWaitSeconds: 0,
+		},
+		() => { throw new Error('request must not run'); },
+	);
+	await assert.rejects(
+		() => new Allowly().execute.call(context),
+		/Statement must be at most 256 printable ASCII characters with no outer whitespace/,
+	);
+	assert.equal(context.requests.length, 0);
+
+	const nonAscii = managedWebhookContext(
+		'sealWebhook',
+		{
+			sealRecordInputMode: 'rawJson',
+			sealRecordJson: '{}',
+			sealWebhookType: 'factura-ñ',
+			sealWebhookIdempotencyKey: 'detail-validation-unicode',
+			sealWebhookWaitSeconds: 0,
+		},
+		() => { throw new Error('request must not run'); },
+	);
+	await assert.rejects(() => new Allowly().execute.call(nonAscii), /printable ASCII/);
+	assert.equal(nonAscii.requests.length, 0);
+});
+
 test('zero-wait webhook output is pending and the retrieve operation completes it', async () => {
 	const fixture = await sealFixture();
 	const rawJson = JSON.stringify(fixture.record);
-	const pendingDelivery = webhookDelivery(fixture, { status: 'signing', receipt: null });
+	const details = {
+		type: 'invoice',
+		reference: 'INV-PENDING-1042',
+		statement: 'Approved for later retrieval',
+	};
+	const pendingDelivery = webhookDelivery(fixture, { status: 'signing', receipt: null, metadata: details });
 	const sendContext = managedWebhookContext(
 		'sealWebhook',
 		{
 			sealRecordInputMode: 'rawJson',
 			sealRecordJson: rawJson,
+			sealWebhookType: 'invoice',
+			sealWebhookReference: 'INV-PENDING-1042',
+			sealWebhookStatement: 'Approved for later retrieval',
 			sealWebhookIdempotencyKey: '',
 			sealWebhookWaitSeconds: 0,
 		},
@@ -746,6 +832,7 @@ test('zero-wait webhook output is pending and the retrieve operation completes i
 	assert.equal(pending[0][0].json.pending, true);
 	assert.equal(pending[0][0].json.attemptId, pendingDelivery.attempt_id);
 	assert.equal(pending[0][0].json.recordJson, rawJson);
+	assert.deepEqual(pending[0][0].json.metadata, details);
 	assert.equal(sendContext.requests.length, 1);
 
 	const retrieveContext = managedWebhookContext(
@@ -780,21 +867,42 @@ test('managed webhook retries Retry-After with the same ID and exact content', a
 		{
 			sealRecordInputMode: 'rawJson',
 			sealRecordJson: rawJson,
+			sealWebhookType: 'invoice',
+			sealWebhookReference: 'INV-1042',
+			sealWebhookStatement: 'Approved for payment',
 			sealWebhookIdempotencyKey: 'sender-event-retry',
 			sealWebhookWaitSeconds: 0,
 		},
 		(_options, call) => call === 1
 			? fullHttpResponse(503, { error: { code: 'overloaded' } }, { 'Retry-After': '0' })
-			: fullHttpResponse(202, webhookDelivery(fixture, { status: 'signing', receipt: null })),
+			: fullHttpResponse(202, webhookDelivery(fixture, {
+				status: 'signing',
+				receipt: null,
+				metadata: {
+					type: 'invoice',
+					reference: 'INV-1042',
+					statement: 'Approved for payment',
+				},
+			})),
 	);
 	const output = await new Allowly().execute.call(context);
 	assert.equal(output[0][0].json.pending, true);
+	assert.deepEqual(output[0][0].json.metadata, {
+		type: 'invoice',
+		reference: 'INV-1042',
+		statement: 'Approved for payment',
+	});
 	assert.equal(context.requests.length, 2);
 	assert.equal(context.requests[0].url, context.requests[1].url);
 	assert.equal(context.requests[0].headers['Idempotency-Key'], 'sender-event-retry');
 	assert.equal(context.requests[1].headers['Idempotency-Key'], 'sender-event-retry');
 	assert.equal(context.requests[0].body.toString('utf8'), rawJson);
 	assert.equal(context.requests[1].body.toString('utf8'), rawJson);
+	for (const request of context.requests) {
+		assert.equal(request.headers['Allowly-Seal-Type'], 'invoice');
+		assert.equal(request.headers['Allowly-Seal-Reference'], 'INV-1042');
+		assert.equal(request.headers['Allowly-Seal-Statement'], 'Approved for payment');
+	}
 });
 
 test('managed webhook errors and malformed credentials never expose the URL or record', async () => {
@@ -804,6 +912,7 @@ test('managed webhook errors and malformed credentials never expose the URL or r
 		{
 			sealRecordInputMode: 'rawJson',
 			sealRecordJson: privateRecord,
+			sealWebhookStatement: 'PRIVATE_DETAIL_MARKER',
 			sealWebhookIdempotencyKey: 'sender-conflict',
 			sealWebhookWaitSeconds: 0,
 		},
@@ -817,6 +926,7 @@ test('managed webhook errors and malformed credentials never expose the URL or r
 			assert.match(error.message, /HTTP 409: idempotency_key_reused/);
 			assert.equal(error.message.includes(WEBHOOK_TOKEN), false);
 			assert.equal(error.message.includes('PRIVATE_RECORD_MARKER'), false);
+			assert.equal(error.message.includes('PRIVATE_DETAIL_MARKER'), false);
 			return true;
 		},
 	);

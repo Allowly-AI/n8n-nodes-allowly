@@ -31,9 +31,13 @@ No ordinary API key, policy, authorization, or local hashing step is required. T
 
 Choose **Parsed Value** for ordinary n8n objects. Choose **Raw JSON Text** when exact number spelling, duplicate keys, and other byte-level details matter. Allowly applies the versioned `allowly.seal.jcs-sha256.v1` profile and rejects malformed or unsafe JSON.
 
+Optionally map **Type**, **Reference**, and **Statement** as Receipt details. For example, use `invoice`, `INV-1042`, and `Approved for payment`. The node sends them in the explicit `Allowly-Seal-Type`, `Allowly-Seal-Reference`, and `Allowly-Seal-Statement` headers, so the raw JSON body and its fingerprint stay unchanged. Each value accepts up to 256 printable ASCII characters with no leading or trailing whitespace; interior spaces are kept. Allowly stores the submitted details in the signed receipt; it does not extract them from the JSON or prove that the statement is true. Do not put secrets or the original record in these fields.
+
 **Wait for Signature** is bounded from 0 to 300 seconds and defaults to 120. A `200` or `202` webhook response confirms only the current delivery state. The node reports `sealed: true` after it retrieves the signed receipt and keys and verifies both the signature and original record. If signing is still running when the wait ends, it returns `pending: true` with an `attemptId`.
 
-Set **Idempotency Key** to a stable sender event ID when the upstream system has one. A retry with the same key and exact JSON recovers the same attempt. Reusing the key with changed JSON returns a conflict. If the field is blank, the node derives a stable key from the n8n execution, node, and item.
+The output `metadata` field carries the returned Receipt details and is `null` for older receipts with none. Once sealed, the node checks that `metadata` matches the signed receipt before returning verified evidence. A rejected attempt still fails with a safe error.
+
+Set **Idempotency Key** to a stable sender event ID when the upstream system has one. A retry with the same key, exact JSON, and same Receipt details recovers the same attempt. Reusing the key after changing the JSON or a detail returns a conflict. If the field is blank, the node derives a stable key from the n8n execution, node, and item.
 
 The private URL is an encrypted n8n credential. The node never adds it or any token-bearing status, receipt, or keys URL to workflow output or customer-facing errors. Credential testing performs a scoped `GET`; it never creates a seal.
 
@@ -130,7 +134,8 @@ Production webhook credentials must use the hosted Allowly API at `https://api.a
 
 - **JSON Input**: parsed n8n value or original raw JSON text.
 - **JSON Record / Raw JSON Text**: the complete record. **Seal JSON with Managed Webhook** sends it to Allowly for in-memory hashing. Retrieval and verification compare it locally without sending it again. The webhook enforces a 1 MiB UTF-8 limit and maximum nesting depth of 32.
-- **Idempotency Key**: optional stable sender event ID. Reusing it with the same JSON recovers the original attempt; changing the JSON conflicts.
+- **Type**, **Reference**, and **Statement**: optional Receipt details, each up to 256 printable ASCII characters with no leading or trailing whitespace. Interior spaces are kept. They are stored with the signed receipt. Reference supports exact retained-receipt search and is not an idempotency key.
+- **Idempotency Key**: optional stable sender event ID. Reusing it with the same JSON and details recovers the original attempt; changing either conflicts.
 - **Wait for Signature**: maximum time to poll, from 0 to 300 seconds. A timeout returns a pending result rather than claiming the record is sealed.
 - **Attempt ID**: opaque ID from a pending result, used by **Retrieve Managed Webhook Seal**.
 - **Signed Seal Receipt**, **Saved Key Document**, and **Expected Workspace ID**: retained evidence used by **Verify Saved JSON Seal** without a credential or network request.
