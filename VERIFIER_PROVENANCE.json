@@ -1,0 +1,14 @@
+{
+  "source_package": "@allowly/verifier",
+  "source_version": "4.1.0",
+  "source_repository": "https://github.com/Allowly-AI/allowly-receipt-format",
+  "source_commit": "d35f181ca5f14124f78285dd8415b6f2734f014d",
+  "bundle": {
+    "path": "nodes/Allowly/seal-verifier.js",
+    "sha256": "b492ede4d86f6960bea9a1119bcfe528009e303731ae5a58dc16af43948dad76"
+  },
+  "fixtures": {
+    "test/fixtures/seal/profile-v1.json": "7c86f0e2086b00fc1a4306eb29f2e158e8f464669804323d40c020f3e9d3367f",
+    "test/fixtures/seal/verification-v1.json": "c275d4620675b197123ba0b57da34d9d327cecd1a751c3eb578eec1af6a132a6"
+  }
+}
