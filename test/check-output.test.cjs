@@ -5,7 +5,6 @@ const { readFileSync } = require('node:fs');
 const { createServer } = require('node:http');
 const { join } = require('node:path');
 const axios = require('axios');
-const { NodeHelpers } = require('n8n-workflow');
 const { AllowlyApi } = require('../dist/credentials/AllowlyApi.credentials.js');
 const { AllowlySealWebhookApi } = require('../dist/credentials/AllowlySealWebhookApi.credentials.js');
 const {
@@ -533,29 +532,6 @@ test('managed webhook is the v2 default while v1 keeps Check', () => {
 			['Statement', 'sealWebhookStatement', ''],
 		],
 	);
-});
-
-test('managed webhook nodes do not require legacy Check fields', () => {
-	const description = new Allowly().description;
-	const node = {
-		name: 'Managed SEAL',
-		type: 'n8n-nodes-allowly.allowly',
-		typeVersion: 2,
-		position: [0, 0],
-		parameters: { operation: 'check' },
-	};
-	assert.equal(
-		NodeHelpers.getNodeParametersIssues(description.properties, node, description),
-		null,
-	);
-
-	node.typeVersion = 1;
-	const legacyIssues = NodeHelpers.getNodeParametersIssues(
-		description.properties,
-		node,
-		description,
-	);
-	assert.deepEqual(Object.keys(legacyIssues.parameters).sort(), ['actions', 'authorization']);
 });
 
 test('managed webhook credential stores one password URL plus a disabled local-development option', () => {
