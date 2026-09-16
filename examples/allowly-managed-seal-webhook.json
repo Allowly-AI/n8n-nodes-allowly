@@ -1,0 +1,459 @@
+{
+  "name": "Allowly SEAL - Managed webhook JSON evidence",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## One private URL, one Allowly node\n1. Open **SEAL** in Allowly and copy the private webhook URL.\n2. Create an **Allowly SEAL Webhook** credential in n8n and paste the URL there.\n3. Attach that credential to **2. SEAL + WAIT + VERIFY**.\n4. Map your JSON and optional Type, Reference, and Statement in step 1, then execute.\n\nNo API key or policy setup is needed. Treat the private URL like a password. Receipt details are stored in the signed receipt; they are not extracted from the JSON. A sealed result includes a verified signature and matching record. A pending result is shown with a safe attempt ID and is never archived as sealed evidence.",
+        "height": 300,
+        "width": 520
+      },
+      "id": "0d7d89f0-1bd1-5fb6-ac45-15e339f5ea8e",
+      "name": "SETUP - Private webhook URL",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        430,
+        -420
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "6e7e0a5e-4573-552b-ad3b-4f34c592d76c",
+      "name": "When clicking Execute workflow",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "Allowly Managed SEAL Evidence v2",
+        "columns": {
+          "column": [
+            {
+              "name": "attempt_id",
+              "type": "string"
+            },
+            {
+              "name": "receipt_id",
+              "type": "string"
+            },
+            {
+              "name": "record_id",
+              "type": "string"
+            },
+            {
+              "name": "original_json",
+              "type": "string"
+            },
+            {
+              "name": "receipt_json",
+              "type": "string"
+            },
+            {
+              "name": "receipt_details_json",
+              "type": "string"
+            },
+            {
+              "name": "keys_document_json",
+              "type": "string"
+            },
+            {
+              "name": "trusted_key_fingerprints_json",
+              "type": "string"
+            },
+            {
+              "name": "workspace_id",
+              "type": "string"
+            },
+            {
+              "name": "seal_profile",
+              "type": "string"
+            },
+            {
+              "name": "record_sha256",
+              "type": "string"
+            },
+            {
+              "name": "allowly_recorded_at",
+              "type": "string"
+            },
+            {
+              "name": "signature_verified",
+              "type": "boolean"
+            },
+            {
+              "name": "record_matches",
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {
+          "createIfNotExists": true
+        }
+      },
+      "id": "2cc2266f-d84a-52d1-b88f-85a241cf8357",
+      "name": "0. CREATE OR REUSE EVIDENCE TABLE",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "managed-seal-record-id",
+              "name": "record_id",
+              "value": "invoice_webhook_demo_001",
+              "type": "string"
+            },
+            {
+              "id": "managed-seal-record-json",
+              "name": "record_json",
+              "value": "{\"amount\":125.5,\"currency\":\"USD\",\"customer\":\"buyer@example.invalid\",\"invoice_id\":\"invoice_webhook_demo_001\",\"lines\":[{\"quantity\":2,\"sku\":\"demo-1\"}]}",
+              "type": "string"
+            },
+            {
+              "id": "managed-seal-type",
+              "name": "receipt_type",
+              "value": "invoice",
+              "type": "string"
+            },
+            {
+              "id": "managed-seal-reference",
+              "name": "receipt_reference",
+              "value": "INV-1042",
+              "type": "string"
+            },
+            {
+              "id": "managed-seal-statement",
+              "name": "receipt_statement",
+              "value": "Approved for payment",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": false,
+        "options": {}
+      },
+      "id": "49e264ff-e097-5faf-b182-7eb26a29646f",
+      "name": "1. JSON RECORD - Map Yours Here",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "sealWebhook",
+        "sealRecordInputMode": "rawJson",
+        "sealRecordJson": "={{ $json.record_json }}",
+        "sealWebhookType": "={{ $json.receipt_type }}",
+        "sealWebhookReference": "={{ $json.receipt_reference }}",
+        "sealWebhookStatement": "={{ $json.receipt_statement }}",
+        "sealWebhookIdempotencyKey": "={{ 'n8n-managed-seal:' + $execution.id + ':' + $json.record_id }}",
+        "sealWebhookWaitSeconds": 120
+      },
+      "id": "db9c9063-4985-55bf-84a9-b9a4d8a29989",
+      "name": "2. SEAL + WAIT + VERIFY",
+      "type": "n8n-nodes-allowly.allowly",
+      "typeVersion": 2,
+      "position": [
+        780,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "managed-seal-complete",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "sealed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "fdda79d3-2c18-5d37-b2ed-6a4c63c54e9c",
+      "name": "SEALED?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1040,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "evidence-attempt-id",
+              "name": "attempt_id",
+              "value": "={{ $json.attemptId }}",
+              "type": "string"
+            },
+            {
+              "id": "evidence-receipt-id",
+              "name": "receipt_id",
+              "value": "={{ $json.receiptId }}",
+              "type": "string"
+            },
+            {
+              "id": "evidence-record-id",
+              "name": "record_id",
+              "value": "={{ $('1. JSON RECORD - Map Yours Here').item.json.record_id }}",
+              "type": "string"
+            },
+            {
+              "id": "evidence-original-json",
+              "name": "original_json",
+              "value": "={{ $json.recordJson }}",
+              "type": "string"
+            },
+            {
+              "id": "evidence-receipt-json",
+              "name": "receipt_json",
+              "value": "={{ JSON.stringify($json.receipt) }}",
+              "type": "string"
+            },
+            {
+              "id": "evidence-receipt-details-json",
+              "name": "receipt_details_json",
+              "value": "={{ JSON.stringify($json.metadata) }}",
+              "type": "string"
+            },
+            {
+              "id": "evidence-keys-json",
+              "name": "keys_document_json",
+              "value": "={{ JSON.stringify($json.keysDocument) }}",
+              "type": "string"
+            },
+            {
+              "id": "evidence-fingerprints-json",
+              "name": "trusted_key_fingerprints_json",
+              "value": "={{ JSON.stringify($json.trustedKeyFingerprints) }}",
+              "type": "string"
+            },
+            {
+              "id": "evidence-workspace",
+              "name": "workspace_id",
+              "value": "={{ $json.workspaceId }}",
+              "type": "string"
+            },
+            {
+              "id": "evidence-profile",
+              "name": "seal_profile",
+              "value": "={{ $json.profile }}",
+              "type": "string"
+            },
+            {
+              "id": "evidence-digest",
+              "name": "record_sha256",
+              "value": "={{ $json.recordSha256 }}",
+              "type": "string"
+            },
+            {
+              "id": "evidence-recorded-at",
+              "name": "allowly_recorded_at",
+              "value": "={{ $json.recordedAt }}",
+              "type": "string"
+            },
+            {
+              "id": "evidence-signature",
+              "name": "signature_verified",
+              "value": "={{ $json.signatureVerified }}",
+              "type": "boolean"
+            },
+            {
+              "id": "evidence-match",
+              "name": "record_matches",
+              "value": "={{ $json.recordMatches }}",
+              "type": "boolean"
+            }
+          ]
+        },
+        "includeOtherFields": false,
+        "options": {}
+      },
+      "id": "33edf788-9ecc-5143-ae3f-d24fcfdf8890",
+      "name": "3. SEALED EVIDENCE - Click Here",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1300,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "upsert",
+        "dataTableId": {
+          "__rl": true,
+          "value": "Allowly Managed SEAL Evidence v2",
+          "mode": "name"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "receipt_id",
+              "keyValue": "={{ $json.receipt_id }}",
+              "condition": "eq"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": null,
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "bc20666a-5ec2-5438-9471-5a5d1dcc9700",
+      "name": "4. ARCHIVE VERIFIED EVIDENCE",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1560,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "pending-next",
+              "name": "next_step",
+              "value": "Use Retrieve Managed Webhook Seal with this attempt ID, the same saved credential, and the unchanged original JSON.",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "e34242b1-578a-5e93-85e0-755a3faa89bb",
+      "name": "3. PENDING - RETRIEVE LATER",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1300,
+        150
+      ]
+    }
+  ],
+  "connections": {
+    "When clicking Execute workflow": {
+      "main": [
+        [
+          {
+            "node": "0. CREATE OR REUSE EVIDENCE TABLE",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "0. CREATE OR REUSE EVIDENCE TABLE": {
+      "main": [
+        [
+          {
+            "node": "1. JSON RECORD - Map Yours Here",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "1. JSON RECORD - Map Yours Here": {
+      "main": [
+        [
+          {
+            "node": "2. SEAL + WAIT + VERIFY",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. SEAL + WAIT + VERIFY": {
+      "main": [
+        [
+          {
+            "node": "SEALED?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SEALED?": {
+      "main": [
+        [
+          {
+            "node": "3. SEALED EVIDENCE - Click Here",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "3. PENDING - RETRIEVE LATER",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3. SEALED EVIDENCE - Click Here": {
+      "main": [
+        [
+          {
+            "node": "4. ARCHIVE VERIFIED EVIDENCE",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "3a5939ea-5d7b-5f6f-8fcf-61937ff003ee",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
