@@ -6,17 +6,36 @@ Use it to seal and verify JSON records, or to authorize and check an AI agent, t
 
 ## Install in n8n
 
-After publishing to npm:
+Allowly is a verified n8n integration. In n8n Cloud, search for **Allowly** in
+the node picker and add it to a workflow.
+
+On self-hosted n8n, an Owner or Admin can install the package:
 
 1. Open n8n.
 2. Go to **Settings -> Community Nodes**.
-3. Install:
+3. Install the current release:
 
 ```text
-n8n-nodes-allowly
+n8n-nodes-allowly@0.2.0
 ```
 
-No n8n marketplace approval is needed for this first path. npm publication is enough for self-service community-node installation.
+The verified integration page is at
+[n8n.io/integrations/allowly](https://n8n.io/integrations/allowly/). Queue-mode
+deployments must install the package on every worker and webhook processor as
+well as the main instance.
+
+## Import the SEAL starter workflow
+
+[Download the managed SEAL workflow JSON](https://raw.githubusercontent.com/Allowly-AI/n8n-nodes-allowly/main/examples/allowly-managed-seal-webhook.json),
+then use **Import from File** in n8n. The workflow is inactive and contains no
+credential, private URL, workflow ID, or token.
+
+Open **SEAL** in Allowly, copy the private webhook URL, and save it in one
+**Allowly SEAL Webhook API** credential. Attach that credential to **2. SEAL +
+WAIT + VERIFY**, map your JSON and optional receipt details, and execute the
+workflow. Verified evidence is written to an n8n Data Table; a pending result
+is kept out of the evidence table and carries the attempt ID needed for later
+retrieval.
 
 ## Operations
 
