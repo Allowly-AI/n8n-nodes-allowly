@@ -1520,7 +1520,6 @@ export class Allowly implements INodeType {
 					'Stored Allowly authorization ID. The authorization already binds the user, agent, and actions.',
 				displayOptions: {
 					show: {
-						'@version': [1],
 						operation: ['check'],
 					},
 				},
@@ -1535,7 +1534,6 @@ export class Allowly implements INodeType {
 				placeholder: 'email.send',
 				displayOptions: {
 					show: {
-						'@version': [1],
 						operation: ['check'],
 					},
 				},
