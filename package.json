@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-allowly",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "n8n community node for sealing JSON records and checking agent actions with Allowly",
   "keywords": [
     "n8n-community-node-package",

@@ -1228,20 +1228,15 @@ export class Allowly implements INodeType {
 		},
 		inputs: [NodeConnectionTypes.Main],
 		outputs: [NodeConnectionTypes.Main],
+		// n8n 2.33 treats show.operation as authentication and can hide/reset Operation.
+		// Exclusion rules keep credential selection independent of the operation.
 		credentials: [
 			{
 				name: 'allowlySealWebhookApi',
 				required: true,
 				testedBy: 'testSealWebhookCredential',
 				displayOptions: {
-					show: { operation: ['sealWebhook', 'retrieveWebhookSeal'] },
-				},
-			},
-			{
-				name: 'allowlyApi',
-				required: true,
-				displayOptions: {
-					show: {
+					hide: {
 						operation: [
 							'check',
 							'createAuthorization',
@@ -1250,8 +1245,16 @@ export class Allowly implements INodeType {
 							'seal',
 							'settleBudget',
 							'verifySeal',
+							'verifySealEvidence',
 						],
 					},
+				},
+			},
+			{
+				name: 'allowlyApi',
+				required: true,
+				displayOptions: {
+					hide: { operation: ['sealWebhook', 'retrieveWebhookSeal', 'verifySealEvidence'] },
 				},
 			},
 		],
