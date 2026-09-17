@@ -37,6 +37,14 @@ workflow. Verified evidence is written to an n8n Data Table; a pending result
 is kept out of the evidence table and carries the attempt ID needed for later
 retrieval.
 
+## Example: Stripe refunds with review
+
+The [Stripe test-refund example](examples/stripe-refund-with-approval.md) targets
+`n8n-nodes-allowly` **0.2.1**. Import the workflow, configure credentials and a
+stored authorization, then test allow, deny, confirmation, and escalation paths.
+It binds approval to the refund request, checks again after review, and preserves
+the Stripe result separately from the decision receipt.
+
 ## Operations
 
 ### Seal JSON with Managed Webhook
