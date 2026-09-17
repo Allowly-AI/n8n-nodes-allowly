@@ -16,7 +16,7 @@ On self-hosted n8n, an Owner or Admin can install the package:
 3. Install the current release:
 
 ```text
-n8n-nodes-allowly@0.2.0
+n8n-nodes-allowly@0.2.1
 ```
 
 The verified integration page is at
