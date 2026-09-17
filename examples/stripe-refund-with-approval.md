@@ -153,8 +153,26 @@ review input, changed requests, test-mode enforcement, retries, failures, and pe
 receipt recovery. The mock Stripe retry behavior represents its documented API
 contract; it is not a live Stripe integration test.
 
-The template's node parameters and expressions were also checked against installed
-n8n **2.33.3**. Before publishing it as a tested marketplace template, complete an
-end-to-end run on your n8n instance with Allowly and Stripe test credentials,
-including authenticated review, rejection, timeout, and retries. Those service-backed
-runs have not been performed as part of this addition.
+On **2026-09-16**, the workflow passed 11 service-backed scenarios using **$10 USD
+Stripe test payments**, n8n **2.33.3**, and a local build of Allowly node **0.2.1**:
+
+- Direct allow, confirmation approval, and escalation approval each created one
+  successful $10 refund. Stripe independently reported exactly those three refunds.
+- Deny, confirmation rejection, escalation rejection, changed review resource,
+  and the original four-minute timeout created no refund.
+- A review without its authentication header returned HTTP 403 and stayed paused.
+- An unchanged retry returned the original refund ID. Reusing that request ID with
+  a different payment failed with Stripe's `idempotency_error` and created no refund.
+
+The workflow first exported pending receipts. All four successful executions'
+decision receipts were later retrieved as signed and verified separately using
+`@allowly/verifier` **4.1.0**, with the expected workspace ID and that local runtime's
+workspace public keys. The workflow itself still reports verification as
+`not_performed`.
+
+The test used an isolated local Allowly workspace and disposable n8n instance.
+Only the disposable Allowly API origins, credential references, and request inputs
+were adjusted; the workflow graph and decision logic were unchanged. Separate test
+policies forced each decision at $10. This does not test the guide's $50/$500/$1,000
+thresholds, public Allowly routing, or installation from npm. Check those settings
+on the intended deployment before distributing a configured template.
