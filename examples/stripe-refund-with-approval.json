@@ -8,7 +8,7 @@
       "typeVersion": 1,
       "position": [
         0,
-        0
+        40
       ],
       "parameters": {}
     },
@@ -19,7 +19,7 @@
       "typeVersion": 3.4,
       "position": [
         220,
-        0
+        40
       ],
       "parameters": {
         "mode": "raw",
@@ -34,7 +34,7 @@
       "typeVersion": 2,
       "position": [
         440,
-        0
+        40
       ],
       "parameters": {
         "jsCode": "if ($input.all().length !== 1) throw new Error('Run one refund request at a time.');\nconst r = $input.first().json;\nif (typeof r.authorizationId !== 'string' || !/^auth_[A-Za-z0-9_-]+$/.test(r.authorizationId)) throw new Error('Set a stored Allowly authorization ID.');\nif (typeof r.refundRequestId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(r.refundRequestId)) throw new Error('Use a stable refund request ID of 1-64 ASCII letters, digits, hyphens or underscores.');\nif (typeof r.paymentIntentId !== 'string' || !/^pi_[A-Za-z0-9]{1,80}$/.test(r.paymentIntentId)) throw new Error('Set a Stripe test PaymentIntent ID.');\nif (!Number.isSafeInteger(r.amountMinor) || r.amountMinor < 1 || r.amountMinor > 99999999) throw new Error('amountMinor must be a positive integer, at most 99999999.');\nif (r.currency !== 'usd' || r.reason !== 'requested_by_customer') throw new Error('This example supports USD customer-requested refunds only.');\n// Bind every executed refund field to approval; no crypto module or extra dependency.\nconst resource = ['stripe-refund', r.refundRequestId, r.paymentIntentId, r.amountMinor, r.currency, r.reason].join(':');\nreturn [{json: {authorizationId:r.authorizationId, refundRequestId:r.refundRequestId, paymentIntentId:r.paymentIntentId, amountMinor:r.amountMinor, currency:r.currency, reason:r.reason, resource, stripeIdempotencyKey:'allowly-refund:' + r.refundRequestId, context:{refund_request_id:r.refundRequestId, payment_intent_id:r.paymentIntentId, amount_minor:r.amountMinor, currency:r.currency, reason:r.reason}}}];"
@@ -46,8 +46,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        660,
-        0
+        800,
+        40
       ],
       "parameters": {
         "url": "={{ 'https://api.stripe.com/v1/payment_intents/' + $('Validate request').first().json.paymentIntentId }}",
@@ -69,8 +69,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        880,
-        0
+        1020,
+        40
       ],
       "parameters": {
         "jsCode": "const p = $input.first().json;\nconst r = $('Validate request').first().json;\nif (p.object !== 'payment_intent' || p.id !== r.paymentIntentId || p.livemode !== false) throw new Error('A matching Stripe test-mode PaymentIntent is required; live or malformed responses stop here.');\nif (p.status !== 'succeeded' || p.currency !== r.currency || !Number.isSafeInteger(p.amount_received) || r.amountMinor > p.amount_received) throw new Error('Use a succeeded USD test payment with enough received funds.');\nreturn [{json:r}];"
@@ -82,8 +82,8 @@
       "type": "n8n-nodes-allowly.allowly",
       "typeVersion": 1,
       "position": [
-        1100,
-        0
+        1240,
+        40
       ],
       "parameters": {
         "operation": "check",
@@ -103,8 +103,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1320,
-        0
+        1460,
+        40
       ],
       "parameters": {
         "jsCode": "const d = $input.first().json;\nconst result = d.results?.['refund.create'];\nif (d.action !== 'refund.create' || !['allow','deny','confirm','escalate'].includes(d.decision) || result?.decision !== d.decision) throw new Error('Invalid Allowly decision; no refund.');\nconst receiptId = d.receipt?.receipt_id ?? d.receipt?.receipt?.receipt_id;\nif (typeof receiptId !== 'string' || !/^rcp_[A-Za-z0-9_-]+$/.test(receiptId)) throw new Error('Missing decision receipt; no refund.');\nif (d.decision === 'confirm' && (typeof d.confirmNonce !== 'string' || !d.confirmNonce)) throw new Error('Missing confirmation nonce.');\nif (d.decision === 'escalate' && (typeof d.escalationId !== 'string' || !d.escalationId)) throw new Error('Missing escalation ID.');\nreturn [{json:{...d, receiptId}}];"
@@ -116,8 +116,8 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        1540,
-        0
+        1680,
+        40
       ],
       "parameters": {
         "conditions": {
@@ -149,8 +149,8 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        1760,
-        240
+        1900,
+        260
       ],
       "parameters": {
         "conditions": {
@@ -182,8 +182,8 @@
       "type": "n8n-nodes-base.stopAndError",
       "typeVersion": 1,
       "position": [
-        1980,
-        480
+        1900,
+        500
       ],
       "parameters": {
         "errorType": "errorMessage",
@@ -196,8 +196,8 @@
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
       "position": [
-        1980,
-        200
+        2300,
+        620
       ],
       "parameters": {
         "resume": "webhook",
@@ -219,8 +219,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2200,
-        200
+        2520,
+        620
       ],
       "parameters": {
         "jsCode": "const body = $input.first().json.body;\nconst request = $('Validate request').first().json;\nif (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).sort().join(',') !== 'approved,resource') throw new Error('Review missing, timed out, or has unexpected fields.');\nif (typeof body.approved !== 'boolean' || body.resource !== request.resource) throw new Error('Review must contain an explicit boolean and the exact frozen refund resource.');\nreturn [{json:{approved:body.approved}}];"
@@ -232,8 +232,8 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        2420,
-        200
+        2740,
+        620
       ],
       "parameters": {
         "conditions": {
@@ -265,8 +265,8 @@
       "type": "n8n-nodes-allowly.allowly",
       "typeVersion": 1,
       "position": [
-        2640,
-        100
+        2960,
+        520
       ],
       "parameters": {
         "operation": "resolveConfirmation",
@@ -282,8 +282,8 @@
       "type": "n8n-nodes-allowly.allowly",
       "typeVersion": 1,
       "position": [
-        2640,
-        300
+        2960,
+        820
       ],
       "parameters": {
         "operation": "resolveEscalation",
@@ -299,8 +299,8 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        2860,
-        200
+        3340,
+        620
       ],
       "parameters": {
         "conditions": {
@@ -332,8 +332,8 @@
       "type": "n8n-nodes-allowly.allowly",
       "typeVersion": 1,
       "position": [
-        3080,
-        200
+        3560,
+        620
       ],
       "parameters": {
         "operation": "check",
@@ -353,8 +353,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3300,
-        200
+        3780,
+        620
       ],
       "parameters": {
         "jsCode": "const d = $input.first().json;\nconst receiptId = d.receipt?.receipt_id ?? d.receipt?.receipt?.receipt_id;\nif (d.action !== 'refund.create' || d.decision !== 'allow' || d.results?.['refund.create']?.decision !== 'allow' || typeof receiptId !== 'string' || !/^rcp_[A-Za-z0-9_-]+$/.test(receiptId)) throw new Error('Fresh check did not allow this refund; start a new review.');\nreturn [{json:{...d,receiptId}}];"
@@ -366,8 +366,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3520,
-        -160
+        3340,
+        40
       ],
       "parameters": {
         "jsCode": "const decision = $input.first().json;\nreturn [{json:{request:$('Validate request').first().json,decision}}];"
@@ -379,8 +379,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        3740,
-        -160
+        3560,
+        40
       ],
       "parameters": {
         "url": "https://api.stripe.com/v1/refunds",
@@ -434,8 +434,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3960,
-        -160
+        3780,
+        40
       ],
       "parameters": {
         "jsCode": "const refund = $input.first().json;\nconst permitted = $('Refund permitted').first().json;\nconst r = permitted.request;\nif (refund.object !== 'refund' || typeof refund.id !== 'string' || !/^re_[A-Za-z0-9]+$/.test(refund.id) || refund.payment_intent !== r.paymentIntentId || refund.amount !== r.amountMinor || refund.currency !== r.currency || typeof refund.status !== 'string') throw new Error('Unexpected refund response. Reconcile in Stripe before retrying; keep the same request ID.');\nreturn [{json:{request:r,decision:permitted.decision,stripeRefund:{id:refund.id,payment_intent:refund.payment_intent,amount:refund.amount,currency:refund.currency,status:refund.status},receiptVerification:'not_performed'}}];"
@@ -448,7 +448,7 @@
       "typeVersion": 4.2,
       "position": [
         4180,
-        -160
+        40
       ],
       "parameters": {
         "url": "={{ 'https://api.allowly.ai/v1/receipts/' + $('Refund result').first().json.decision.receiptId }}",
@@ -471,7 +471,7 @@
       "typeVersion": 2,
       "position": [
         4400,
-        -160
+        40
       ],
       "parameters": {
         "jsCode": "const evidence = $('Refund result').first().json;\nconst envelope = $input.first().json;\nconst receiptId = envelope.receipt_id ?? envelope.receipt?.receipt_id;\nif (!['signed','pending'].includes(envelope.status) || receiptId !== evidence.decision.receiptId) throw new Error('Unexpected receipt response. Keep Refund result and retrieve its receipt ID separately; do not create another refund.');\nif (envelope.status === 'signed' && typeof envelope.receipt?.signature !== 'string') throw new Error('Signed receipt is missing its signature.');\nreturn [{json:{...evidence,decisionReceipt:envelope,receiptPending:envelope.status === 'pending'}}];"
@@ -483,13 +483,110 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        0,
-        -460
+        -80,
+        -1100
       ],
       "parameters": {
-        "content": "## Stripe test refunds with Allowly 0.2.1\nRead examples/stripe-refund-with-approval.md first.\nSelect Allowly API credentials on all Allowly nodes and Fetch decision receipt. Select the SAME Stripe TEST credential on both Stripe HTTP nodes. Set Header Auth on Wait for reviewer.\nCreate/store authorization once. Configure Refund request. Only USD test payments run. Review body: {\"approved\":true,\"resource\":\"EXACT RESOURCE FROM Validate request\"}. Four-minute timeout stops.\nRefund result is available even if receipt retrieval fails. Pending receipts are not signed or verified. Never change the request ID to retry an uncertain refund.",
-        "height": 340,
-        "width": 700
+        "content": "## Stripe test refunds with Allowly approval\n\n### How it works\nRun one USD test refund per execution. The workflow checks a stored Allowly authorization before calling Stripe. An allowed request proceeds; a denied request stops. Confirmation or escalation pauses for an authenticated reviewer, then requires a fresh allow decision for the same refund details.\n\nThe output keeps the Stripe refund ID and status alongside the Allowly decision receipt. Receipt signing may be pending; this workflow does not verify signatures. A decision receipt does not prove that a refund completed.\n\n### Setup\n1. On self-hosted n8n, install **n8n-nodes-allowly 0.2.1** and allow Code nodes.\n2. Follow the [full setup guide](https://github.com/Allowly-AI/n8n-nodes-allowly/blob/main/examples/stripe-refund-with-approval.md) to create the refund policy and store one authorization.\n3. Create a succeeded USD Stripe test payment. Select the **same Stripe test credential** on both Stripe HTTP nodes.\n4. Select the **same Allowly API credential** on all Allowly nodes and **Fetch decision receipt**.\n5. Set a dedicated **Header Auth** credential on **Wait for reviewer**. Keep the review secret separate from API keys.\n6. Fill **Refund request** with the stored authorization, payment ID, stable request ID, and amount in cents. Run the full workflow from **Run test refund**, with no pinned data.\n\n**Test mode only.** Do not run the refund node alone. Keep the request ID and fields unchanged on retries; reconcile uncertain refunds in Stripe first. Production use needs durable refund tracking and reconciliation.",
+        "height": 850,
+        "width": 760,
+        "color": 1
+      }
+    },
+    {
+      "id": "1c33b488-d447-54db-86bf-c43e9804ab7e",
+      "name": "Prepare one refund request",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -80,
+        -160
+      ],
+      "parameters": {
+        "content": "## 1. Prepare one refund request\nEdit **Refund request** before running. Use integer cents, USD, and a stable request ID. Validation freezes the details used by the policy check, reviewer, and Stripe. Run one request per full execution.",
+        "height": 420,
+        "width": 720,
+        "color": 7
+      }
+    },
+    {
+      "id": "d0189215-0588-50d2-951f-93fb817cd2f2",
+      "name": "Check payment and policy",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        720,
+        -160
+      ],
+      "parameters": {
+        "content": "## 2. Check the payment and policy\nOnly a matching, succeeded Stripe test payment continues. Allowly checks the stored authorization: allow proceeds, confirm or escalate requires review, and deny stops. Invalid responses and errors stop the workflow.",
+        "height": 880,
+        "width": 1440,
+        "color": 7
+      }
+    },
+    {
+      "id": "2efed07e-9004-55f5-bc6a-0b53060f72e7",
+      "name": "Review the frozen request",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2240,
+        360
+      ],
+      "parameters": {
+        "content": "## 3. Review the frozen request\nWithin four minutes, POST to the execution's resume URL using Header Auth. Send only boolean `approved` and the exact `resource` from **Validate request**. Validation binds the response to this refund before resolving the Allowly review.",
+        "height": 700,
+        "width": 960,
+        "color": 7
+      }
+    },
+    {
+      "id": "7a602999-cb4a-5ef3-bd68-196fa6282316",
+      "name": "Recheck after approval",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        3280,
+        360
+      ],
+      "parameters": {
+        "content": "## 4. Require a fresh allow\nAfter approval, recheck the original authorization and unchanged refund details. Only a fresh allow reaches Stripe. Rejection, timeout, or any other decision stops; approval alone cannot create the refund.",
+        "height": 580,
+        "width": 760,
+        "color": 7
+      }
+    },
+    {
+      "id": "16953c4d-2a0a-5b10-ae3d-b150c16b3047",
+      "name": "Create the Stripe test refund",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        3280,
+        -160
+      ],
+      "parameters": {
+        "content": "## 5. Create the Stripe test refund\nUse the same Stripe test credential as **Read Stripe payment**. Unchanged retries reuse the request ID and fields; Stripe's duplicate protection is time-limited. Save **Refund result**, including its refund ID and status.",
+        "height": 440,
+        "width": 760,
+        "color": 7
+      }
+    },
+    {
+      "id": "ae940a64-686d-5a84-95df-d35eaf2e1868",
+      "name": "Retain decision evidence",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        4120,
+        -160
+      ],
+      "parameters": {
+        "content": "## 6. Retain decision evidence\nSave the refund result with its decision receipt. Signing may be pending; signatures are not verified here. If receipt retrieval fails, recover it separately using **Refund result**. Do not create another refund to recover evidence.",
+        "height": 440,
+        "width": 620,
+        "color": 7
       }
     }
   ],
