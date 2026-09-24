@@ -1,4 +1,4 @@
-# Stripe test refunds with Allowly review
+# Process Stripe refunds with Allowly approval and reviewer checks
 
 [Import this workflow JSON](stripe-refund-with-approval.json).
 It targets **n8n-nodes-allowly 0.2.1** and uses n8n's standard HTTP, Code, IF,
