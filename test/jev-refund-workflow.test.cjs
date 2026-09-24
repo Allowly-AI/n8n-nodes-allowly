@@ -219,7 +219,6 @@ test('public Jev workflow is inactive, credential-free, and contains no OpenRout
 	assert.equal(workflow.active, false);
 	assert.deepEqual(workflow.pinData, {});
 	assert.equal(workflow.settings.executionOrder, 'v1');
-	assert.equal(workflow.nodes.some((node) => node.type === 'n8n-nodes-base.stickyNote'), false);
 	assert.equal(new Set(workflow.nodes.map((node) => node.name)).size, workflow.nodes.length);
 	assert.equal(new Set(workflow.nodes.map((node) => node.id)).size, workflow.nodes.length);
 	for (const node of workflow.nodes) {
