@@ -82,8 +82,8 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        1240,
-        40
+        1420,
+        100
       ],
       "parameters": {
         "conditions": {
@@ -115,8 +115,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1460,
-        -80
+        1640,
+        20
       ],
       "parameters": {
         "method": "POST",
@@ -155,8 +155,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1460,
-        180
+        1640,
+        280
       ],
       "parameters": {
         "jsCode": "return [{json:{model:'typesafe/jev-1.13-mock',answers:{refund_requested:{type:'noul',noul:0.99},refund_reason:{type:'choice',choice:'duplicate_charge',probabilities:{duplicate_charge:0.97,defective_or_damaged:0.005,not_received:0.005,changed_mind:0.005,unauthorized:0.005,other_or_unclear:0.01},confidence:0.98}},usage:{input_tokens:0,output_tokens:0,cost:0},id:'mock-jev-refund-001',provider:'Allowly demo fixture'}}];"
@@ -168,8 +168,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1680,
-        40
+        1900,
+        100
       ],
       "parameters": {
         "jsCode": "const response = $input.first().json;\nconst r = $('Validate request').first().json;\nconst reasons = ['duplicate_charge','defective_or_damaged','not_received','changed_mind','unauthorized','other_or_unclear'];\nconst autoReasons = new Set(['duplicate_charge','defective_or_damaged','not_received','changed_mind']);\nconst unit = (name, value) => { if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) throw new Error(name + ' must be a finite number from 0 to 1.'); return value; };\nif (!response || typeof response !== 'object' || Array.isArray(response)) throw new Error('Jev returned no decision object.');\nif (r.jevMode === 'mock') {\n  if (response.model !== 'typesafe/jev-1.13-mock' || response.provider !== 'Allowly demo fixture' || response.id !== 'mock-jev-refund-001') throw new Error('Unexpected mock Jev fixture.');\n} else {\n  if (typeof response.model !== 'string' || !/^typesafe\\/jev-1\\.13(?:-[0-9]{8})?$/.test(response.model)) throw new Error('OpenRouter did not return the pinned Jev 1.13 family.');\n  if (response.provider !== 'TypeSafe' || typeof response.id !== 'string' || !/^gen-dec-[A-Za-z0-9_-]{1,200}$/.test(response.id)) throw new Error('OpenRouter returned unexpected Jev provenance.');\n}\nif (!response.answers || typeof response.answers !== 'object' || Array.isArray(response.answers) || Object.keys(response.answers).sort().join(',') !== 'refund_reason,refund_requested') throw new Error('Jev must return exactly the two requested answers.');\nconst requested = response.answers?.refund_requested;\nconst reason = response.answers?.refund_reason;\nif (requested?.type !== 'noul' || reason?.type !== 'choice' || !reasons.includes(reason.choice)) throw new Error('Jev returned unexpected answer types or reason.');\nconst refundRequested = unit('refund_requested.noul', requested.noul);\nconst confidence = unit('refund_reason.confidence', reason.confidence);\nif (!reason.probabilities || typeof reason.probabilities !== 'object' || Array.isArray(reason.probabilities) || Object.keys(reason.probabilities).sort().join(',') !== [...reasons].sort().join(',')) throw new Error('Jev must return one probability for every refund reason.');\nconst probabilities = reasons.map((key) => unit('refund_reason.probabilities.' + key, reason.probabilities[key]));\nif (Math.abs(probabilities.reduce((sum, value) => sum + value, 0) - 1) > 0.03) throw new Error('Jev reason probabilities must sum to approximately 1.');\nconst selectedProbability = reason.probabilities[reason.choice];\nif (selectedProbability + 0.01 < Math.max(...probabilities)) throw new Error('Jev selected a reason outside the highest-probability band.');\nconst usage = response.usage;\nif (!usage || !Number.isSafeInteger(usage.input_tokens) || usage.input_tokens < 0 || !Number.isSafeInteger(usage.output_tokens) || usage.output_tokens < 0 || typeof usage.cost !== 'number' || !Number.isFinite(usage.cost) || usage.cost < 0) throw new Error('Jev returned invalid usage data.');\nconst jev = {\n  decisionSource:r.jevMode === 'mock' ? 'mock_fixture' : 'openrouter_live',\n  triageContract:'refund_triage_v1',\n  jevGenerationId:response.id,\n  jevModel:response.model,\n  jevProvider:response.provider,\n  refundRequestedPpm:Math.round(refundRequested * 1000000),\n  refundReason:reason.choice,\n  refundReasonProbabilityPpm:Math.round(selectedProbability * 1000000),\n  refundReasonConfidencePpm:Math.round(confidence * 1000000),\n  refundReasonProbabilitiesPpm:Object.fromEntries(reasons.map((key) => [key, Math.round(reason.probabilities[key] * 1000000)])),\n  usage:{inputTokens:usage.input_tokens,outputTokens:usage.output_tokens,costMicrousd:Math.round(usage.cost * 1000000)},\n};\njev.triageRoute = jev.refundRequestedPpm <= 100000 ? 'not_requested' : jev.refundRequestedPpm >= 900000 && jev.refundReason !== 'other_or_unclear' && jev.refundReasonConfidencePpm >= 800000 && jev.refundReasonProbabilityPpm >= 600000 ? 'ready_for_allowly' : 'manual_review';\nconst context = {refund_request_id:r.refundRequestId,customer_message_id:r.customerMessageId,payment_intent_id:r.paymentIntentId,amount_minor:r.amountMinor,currency:r.currency,reason:r.reason,triage_source:jev.decisionSource,jev_generation_id:jev.jevGenerationId,jev_model:jev.jevModel,jev_provider:jev.jevProvider,refund_requested_ppm:jev.refundRequestedPpm,refund_reason:jev.refundReason,refund_reason_probability_ppm:jev.refundReasonProbabilityPpm,refund_reason_confidence_ppm:jev.refundReasonConfidencePpm,triage_route:jev.triageRoute};\nconst resource = ['stripe-refund',r.refundRequestId,r.customerMessageId,r.paymentIntentId,r.amountMinor,r.currency,r.reason,jev.decisionSource,jev.jevGenerationId,jev.jevModel,jev.refundRequestedPpm,jev.refundReason,jev.refundReasonProbabilityPpm,jev.refundReasonConfidencePpm,jev.triageRoute,jev.triageContract].join(':');\nreturn [{json:{authorizationId:r.authorizationId,refundRequestId:r.refundRequestId,customerMessageId:r.customerMessageId,paymentIntentId:r.paymentIntentId,amountMinor:r.amountMinor,currency:r.currency,reason:r.reason,resource,stripeIdempotencyKey:'allowly-refund:' + r.refundRequestId,context,jev}}];"
@@ -181,7 +181,7 @@
       "type": "n8n-nodes-allowly.allowly",
       "typeVersion": 1,
       "position": [
-        2340,
+        2380,
         40
       ],
       "parameters": {
@@ -202,7 +202,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2560,
+        2600,
         40
       ],
       "parameters": {
@@ -215,7 +215,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        2780,
+        2820,
         40
       ],
       "parameters": {
@@ -248,7 +248,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        3000,
+        3040,
         260
       ],
       "parameters": {
@@ -281,7 +281,7 @@
       "type": "n8n-nodes-base.stopAndError",
       "typeVersion": 1,
       "position": [
-        3000,
+        3040,
         500
       ],
       "parameters": {
@@ -295,7 +295,7 @@
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
       "position": [
-        3400,
+        3440,
         620
       ],
       "parameters": {
@@ -317,7 +317,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3620,
+        3660,
         620
       ],
       "parameters": {
@@ -330,7 +330,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        3840,
+        3880,
         620
       ],
       "parameters": {
@@ -363,8 +363,8 @@
       "type": "n8n-nodes-allowly.allowly",
       "typeVersion": 1,
       "position": [
-        4060,
-        520
+        4100,
+        580
       ],
       "parameters": {
         "operation": "resolveConfirmation",
@@ -380,8 +380,8 @@
       "type": "n8n-nodes-allowly.allowly",
       "typeVersion": 1,
       "position": [
-        4060,
-        820
+        4100,
+        840
       ],
       "parameters": {
         "operation": "resolveEscalation",
@@ -397,7 +397,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        4440,
+        4480,
         40
       ],
       "parameters": {
@@ -410,7 +410,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        4440,
+        4480,
         620
       ],
       "parameters": {
@@ -443,7 +443,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        4660,
+        4700,
         40
       ],
       "parameters": {
@@ -498,7 +498,7 @@
       "type": "n8n-nodes-allowly.allowly",
       "typeVersion": 1,
       "position": [
-        4660,
+        4700,
         620
       ],
       "parameters": {
@@ -519,7 +519,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        4880,
+        4920,
         40
       ],
       "parameters": {
@@ -532,7 +532,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        4880,
+        4920,
         620
       ],
       "parameters": {
@@ -545,7 +545,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        5280,
+        5320,
         40
       ],
       "parameters": {
@@ -568,11 +568,155 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        5500,
+        5540,
         40
       ],
       "parameters": {
         "jsCode": "const evidence = $('Refund result').first().json;\nconst envelope = $input.first().json;\nconst receiptId = envelope.receipt_id ?? envelope.receipt?.receipt_id;\nif (!['signed','pending'].includes(envelope.status) || receiptId !== evidence.decision.receiptId) throw new Error('Unexpected receipt response. Keep Refund result and retrieve its receipt ID separately; do not create another refund.');\nif (envelope.status === 'signed' && typeof envelope.receipt?.signature !== 'string') throw new Error('Signed receipt is missing its signature.');\nreturn [{json:{...evidence,decisionReceipt:envelope,receiptPending:envelope.status === 'pending'}}];"
+      }
+    },
+    {
+      "id": "863b55d9-202a-583b-9e69-36de416b25e6",
+      "name": "Read before running",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -80,
+        -1050
+      ],
+      "parameters": {
+        "content": "## Route Stripe refunds with Jev decisions and Allowly guardrails\n\n### How it works\nRun one USD Stripe test refund per execution. Jev reads the customer message and returns refund probabilities. The workflow validates and freezes those values. Allowly checks them against your stored policy. Only an allow decision reaches Stripe. Confirmation or escalation pauses for a reviewer, then requires a fresh allow for the same frozen request.\n\nThe default **mock** mode uses a fixed sample message and makes no OpenRouter call. Optional **live** mode sends the message to paid Jev through OpenRouter. Neither mode changes the Stripe test-only restriction.\n\nThe output keeps the Stripe refund result and Allowly decision receipt. Signing may be pending; this workflow does not verify signatures. The receipt does not prove that Jev was correct or that a refund completed.\n\n### Setup\n1. Use self-hosted n8n with Code nodes and **n8n-nodes-allowly 0.2.1**.\n2. Configure the Jev refund context fields and policy rules from this template's setup instructions. Create and store **one authorization**.\n3. Create a succeeded USD Stripe test payment. Select the **same Stripe TEST credential** on both Stripe HTTP nodes.\n4. Select the **same Allowly API credential** on every Allowly node and **Fetch decision receipt**.\n5. Set a dedicated **Header Auth** credential on **Wait for reviewer**; keep its secret separate from API keys.\n6. Fill **Refund request** with your stored authorization, payment ID, stable request/message IDs and amount in cents. Keep the sample message for mock mode. For live mode, set `jevMode` to `live` and select an OpenRouter credential on **Call OpenRouter Jev**.\n\nRun the complete workflow with no pinned data. Keep retry details unchanged and reconcile uncertain refunds first. Production use needs durable refund tracking.",
+        "height": 850,
+        "width": 1100,
+        "color": 1
+      }
+    },
+    {
+      "id": "a6c06c66-5eea-589a-ba32-e352bacd2c51",
+      "name": "1. Prepare one refund",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -80,
+        -140
+      ],
+      "parameters": {
+        "content": "## 1. Prepare one refund\nSet your stored authorization, payment ID, stable request/message IDs and amount in cents. The default is $25. Mock mode requires the included sample message. Input validation stops incomplete or unsupported requests.",
+        "height": 380,
+        "width": 720,
+        "color": 7
+      }
+    },
+    {
+      "id": "a9585273-c9ed-5004-9f4f-fe07ac557f49",
+      "name": "2. Confirm Stripe test facts",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        740,
+        -140
+      ],
+      "parameters": {
+        "content": "## 2. Confirm Stripe test facts\nUse the same Stripe TEST credential here and on Create Stripe test refund. This section requires a succeeded USD test payment with enough received funds. It never creates a payment.",
+        "height": 380,
+        "width": 550,
+        "color": 7
+      }
+    },
+    {
+      "id": "206ec481-5d16-5acf-99c8-1623d8770f1d",
+      "name": "3. Choose mock or live Jev",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1340,
+        -140
+      ],
+      "parameters": {
+        "content": "## 3. Choose mock or live Jev\nMock uses a fixed fixture with no OpenRouter charge. Live sends the customer message to paid Jev. Invalid results stop. Valid results become frozen integer probabilities; mock/live source stays visible. Set n8n execution retention for customer messages.",
+        "height": 640,
+        "width": 930,
+        "color": 7
+      }
+    },
+    {
+      "id": "80d45bb7-776b-5658-bf66-eeb453759244",
+      "name": "4. Apply the Allowly policy",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2310,
+        -140
+      ],
+      "parameters": {
+        "content": "## 4. Apply the Allowly policy\nAllow proceeds to the refund. Confirm or escalate goes to the reviewer. Deny, malformed responses and service errors stop. Reuse the stored authorization; the policy evaluates the frozen Stripe facts and Jev values.",
+        "height": 840,
+        "width": 1040,
+        "color": 7
+      }
+    },
+    {
+      "id": "2febbcc5-413b-5c4b-8b1f-e825a7a3c48b",
+      "name": "5. Review the frozen request",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        3380,
+        420
+      ],
+      "parameters": {
+        "content": "## 5. Review the frozen request\nWithin four minutes, POST exactly {\"approved\":true,\"resource\":\"EXACT_RESOURCE_FROM_FREEZE_JEV_DECISION\"} to the resume URL with dedicated Header Auth. Use false to reject. Resolve the requested confirmation or escalation. A changed resource or timeout stops.",
+        "height": 620,
+        "width": 1000,
+        "color": 7
+      }
+    },
+    {
+      "id": "95d24441-acbd-56c3-b26e-219c3a276ff9",
+      "name": "6. Require a fresh allow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        4420,
+        420
+      ],
+      "parameters": {
+        "content": "## 6. Require a fresh allow\nApproval triggers another Allowly check using the original authorization and identical frozen request. Only a fresh allow proceeds. Rejection stops; changed details need a new review. Header Auth authenticates the callback, not a named person.",
+        "height": 620,
+        "width": 800,
+        "color": 7
+      }
+    },
+    {
+      "id": "3b44374e-f0fc-5fcf-941d-d5f27dcbe196",
+      "name": "7. Create and retain the refund",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        4420,
+        -140
+      ],
+      "parameters": {
+        "content": "## 7. Create and retain the refund\nRun from the trigger, never this section alone. Keep the request ID and fields unchanged for retries. Stripe's idempotency protection has a retention limit: reconcile old or uncertain refunds first. Refund result retains Stripe's ID and status.",
+        "height": 450,
+        "width": 800,
+        "color": 7
+      }
+    },
+    {
+      "id": "37c42683-c5bf-5f14-9ea8-1cdca3328e30",
+      "name": "8. Fetch the decision receipt",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        5260,
+        -140
+      ],
+      "parameters": {
+        "content": "## 8. Fetch the decision receipt\nUse the same Allowly credential. A receipt can be pending; signatures are not verified here. If retrieval fails, keep Refund result and fetch its receipt ID separately. Do not repeat the refund to recover evidence.",
+        "height": 450,
+        "width": 570,
+        "color": 7
       }
     }
   ],
