@@ -32,7 +32,7 @@ type AllowlyAuthorizationResponse = {
 	[key: string]: unknown;
 };
 
-type AgentTokenCache = {
+type IdentityTokenCache = {
 	token: string;
 	expiresAt: number;
 };
@@ -449,12 +449,12 @@ function parseJsonObject(
 	return parsed;
 }
 
-async function agentTokenForCredentials(
+async function identityTokenForCredentials(
 	executeFunctions: IExecuteFunctions,
 	itemIndex: number,
 	credentials: ICredentialDataDecryptedObject,
-	cache: AgentTokenCache | undefined,
-): Promise<{ token?: string; cache?: AgentTokenCache }> {
+	cache: IdentityTokenCache | undefined,
+): Promise<{ token?: string; cache?: IdentityTokenCache }> {
 	if (credentials.identityMode !== 'auth0M2M') return {};
 	if (cache && cache.expiresAt > Date.now() + 30_000) {
 		return { token: cache.token, cache };
@@ -476,7 +476,7 @@ async function agentTokenForCredentials(
 	if (!audience || !clientId || !clientSecret) {
 		throw new NodeOperationError(
 			executeFunctions.getNode(),
-			'Auth0 audience, client ID, and client secret are required for agent identity.',
+			'Auth0 audience, client ID, and client secret are required for external identity.',
 			{ itemIndex },
 		);
 	}
@@ -502,7 +502,7 @@ async function agentTokenForCredentials(
 	} catch {
 		throw new NodeOperationError(
 			executeFunctions.getNode(),
-			'Could not obtain the Auth0 agent token. Check the stored Auth0 credential.',
+			'Could not obtain the Auth0 identity token. Check the stored Auth0 credential.',
 			{ itemIndex },
 		);
 	}
@@ -514,7 +514,7 @@ async function agentTokenForCredentials(
 	) {
 		throw new NodeOperationError(
 			executeFunctions.getNode(),
-			'Auth0 returned an invalid agent token response.',
+			'Auth0 returned an invalid identity token response.',
 			{ itemIndex },
 		);
 	}
@@ -2014,7 +2014,7 @@ export class Allowly implements INodeType {
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
 		const items = this.getInputData();
 		const returnData: INodeExecutionData[] = [];
-		let agentTokenCache: AgentTokenCache | undefined;
+		let identityTokenCache: IdentityTokenCache | undefined;
 
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex += 1) {
 			let operation = '';
@@ -2174,20 +2174,20 @@ export class Allowly implements INodeType {
 				const credentials = await this.getCredentials('allowlyApi', itemIndex);
 				sensitiveValues = [credentials.apiKey, credentials.auth0ClientSecret]
 					.filter((value): value is string => typeof value === 'string' && value.length > 0);
-				let agentToken: string | undefined;
+				let identityToken: string | undefined;
 				if (IDENTITY_OPERATION_NAMES.has(operation)) {
-					const resolved = await agentTokenForCredentials(
+					const resolved = await identityTokenForCredentials(
 						this,
 						itemIndex,
 						credentials,
-						agentTokenCache,
+						identityTokenCache,
 					);
-					agentToken = resolved.token;
-					agentTokenCache = resolved.cache;
-					if (agentToken) sensitiveValues.push(agentToken);
+					identityToken = resolved.token;
+					identityTokenCache = resolved.cache;
+					if (identityToken) sensitiveValues.push(identityToken);
 				}
-				const identityHeaders: IDataObject = agentToken
-					? { 'X-Allowly-Agent-Token': agentToken }
+				const identityHeaders: IDataObject = identityToken
+					? { 'X-Allowly-Agent-Token': identityToken }
 					: {};
 
 				if (operation === 'execute') {
@@ -2682,7 +2682,7 @@ export class Allowly implements INodeType {
 					},
 					body,
 					json: true,
-					disableFollowRedirect: agentToken !== undefined,
+					disableFollowRedirect: identityToken !== undefined,
 					sendCredentialsOnCrossOriginRedirect: false,
 				};
 

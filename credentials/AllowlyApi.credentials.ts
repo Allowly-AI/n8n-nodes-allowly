@@ -49,19 +49,19 @@ export class AllowlyApi implements ICredentialType {
 				'Optional stable secret for Mask Email Locally. Back it up; changing it changes derived user IDs.',
 		},
 		{
-			displayName: 'Agent Identity',
+			displayName: 'External Identity Provider',
 			name: 'identityMode',
 			type: 'options',
 			options: [
 				{
-					name: 'API Key Only',
+					name: 'No External Identity',
 					value: 'apiKeyOnly',
-					description: 'Use for authorizations without an Auth0 agent identity binding',
+					description: 'Use for agent or workflow authorizations without a provider binding',
 				},
 				{
 					name: 'Auth0 Machine-to-Machine',
 					value: 'auth0M2M',
-					description: 'Acquire a short-lived agent token from the customer Auth0 tenant',
+					description: 'Acquire a short-lived identity token from the customer Auth0 tenant',
 				},
 			],
 			default: 'apiKeyOnly',
@@ -82,7 +82,7 @@ export class AllowlyApi implements ICredentialType {
 			type: 'string',
 			default: '',
 			required: true,
-			description: 'API audience configured for this agent in Auth0 and Allowly',
+			description: 'API audience configured for this agent or workflow in Auth0 and Allowly',
 			displayOptions: { show: { identityMode: ['auth0M2M'] } },
 		},
 		{

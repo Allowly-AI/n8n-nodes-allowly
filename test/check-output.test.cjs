@@ -181,6 +181,7 @@ test('check serializes an explicit zero-cost estimate', async () => {
 	await new Allowly().execute.call(context);
 	assert.equal(context.requests[0].body.estimated_cost_micros, 0);
 	assert.ok(Object.hasOwn(context.requests[0].body, 'estimated_cost_micros'));
+	assert.equal(context.requests[0].headers['X-Allowly-Agent-Token'], undefined);
 });
 
 test('check omits the estimate at the -1 default', async () => {
@@ -202,7 +203,7 @@ test('check omits the estimate at the -1 default', async () => {
 	assert.ok(!Object.hasOwn(context.requests[0].body, 'estimated_cost_micros'));
 });
 
-test('identity check acquires an Auth0 token once and keeps it out of output and body', async () => {
+test('workflow identity check acquires an Auth0 token once and keeps it out of output and body', async () => {
 	const tokenRequests = [];
 	const allowlyRequests = [];
 	const parameters = {
@@ -263,13 +264,20 @@ test('identity check acquires an Auth0 token once and keeps it out of output and
 
 test('identity credentials use password fields for stored machine credentials', () => {
 	const credential = new AllowlyApi();
+	const provider = credential.properties.find((candidate) => candidate.name === 'identityMode');
+	assert.equal(provider.displayName, 'External Identity Provider');
+	assert.equal(provider.default, 'apiKeyOnly');
+	assert.deepEqual(provider.options.map(({ name, value }) => ({ name, value })), [
+		{ name: 'No External Identity', value: 'apiKeyOnly' },
+		{ name: 'Auth0 Machine-to-Machine', value: 'auth0M2M' },
+	]);
 	for (const name of ['apiKey', 'auth0ClientId', 'auth0ClientSecret']) {
 		const property = credential.properties.find((candidate) => candidate.name === name);
 		assert.equal(property.typeOptions.password, true, name);
 	}
 });
 
-test('identity request failures redact runtime, Auth0, and agent tokens from errors', async () => {
+test('identity request failures redact runtime, Auth0, and identity tokens from errors', async () => {
 	function failingContext(continueOnFail) {
 		return {
 			getInputData: () => [{ json: {} }],
