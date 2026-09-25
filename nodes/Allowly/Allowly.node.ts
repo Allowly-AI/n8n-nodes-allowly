@@ -32,6 +32,17 @@ type AllowlyAuthorizationResponse = {
 	[key: string]: unknown;
 };
 
+type AgentTokenCache = {
+	token: string;
+	expiresAt: number;
+};
+
+type Auth0TokenResponse = {
+	access_token?: unknown;
+	token_type?: unknown;
+	expires_in?: unknown;
+};
+
 type AllowlyActionResult = {
 	decision?: string;
 	reason?: string;
@@ -98,6 +109,14 @@ type RecordInput =
 
 const DECISION_ORDER: Record<string, number> = { allow: 0, confirm: 1, escalate: 2, deny: 3 };
 
+const IDENTITY_OPERATION_NAMES = new Set([
+	'check',
+	'checkAndEnforce',
+	'execute',
+	'getExecution',
+	'acknowledgeReceipt',
+]);
+
 const API_URL = 'https://api.allowly.ai';
 
 const SEAL_WEBHOOK_PATH = '/v1/seal/webhooks';
@@ -124,6 +143,30 @@ const LEGACY_OPERATION_OPTIONS: INodePropertyOptions[] = [
 		value: 'check',
 		description: 'Call /v1/check before a tool or agent action runs',
 		action: 'Check an authorization',
+	},
+	{
+		name: 'Check & Enforce',
+		value: 'checkAndEnforce',
+		description: 'Release output only for an Allowly allow decision; every other outcome stops',
+		action: 'Check and enforce an authorization',
+	},
+	{
+		name: 'Execute Registered Destination',
+		value: 'execute',
+		description: 'Ask Allowly to decide and dispatch one registered destination',
+		action: 'Execute a registered destination',
+	},
+	{
+		name: 'Get Execution',
+		value: 'getExecution',
+		description: 'Retrieve a stored managed execution without dispatching it again',
+		action: 'Get an execution',
+	},
+	{
+		name: 'Acknowledge Receipt',
+		value: 'acknowledgeReceipt',
+		description: 'Record when this workflow received an exact signed receipt',
+		action: 'Acknowledge a receipt',
 	},
 	{
 		name: 'Create Authorization',
@@ -335,6 +378,151 @@ function parseActions(value: string): string[] {
 				.filter(Boolean),
 		),
 	);
+}
+
+export function auth0TokenEndpoint(value: unknown): string {
+	if (typeof value !== 'string' || !value) {
+		throw new ApplicationError('Auth0 Issuer is required.');
+	}
+	if (!URL.canParse(value)) {
+		throw new ApplicationError('Auth0 Issuer must be an exact HTTPS issuer URL.');
+	}
+	const issuer = new URL(value);
+	if (
+		issuer.protocol !== 'https:' ||
+		issuer.username ||
+		issuer.password ||
+		issuer.search ||
+		issuer.hash ||
+		issuer.pathname !== '/' ||
+		issuer.toString() !== value
+	) {
+		throw new ApplicationError('Auth0 Issuer must be an exact HTTPS origin with a trailing slash.');
+	}
+	return new URL('oauth/token', issuer).toString();
+}
+
+export function parseClientTimestamp(
+	value: unknown,
+	executeFunctions: IExecuteFunctions,
+	itemIndex: number,
+	required: boolean,
+): string | undefined {
+	const timestamp = typeof value === 'string' ? value.trim() : '';
+	if (!timestamp) {
+		if (!required) return undefined;
+		throw new NodeOperationError(executeFunctions.getNode(), 'Client Timestamp is required.', {
+			itemIndex,
+		});
+	}
+	if (!/(?:Z|[+-]\d{2}:\d{2})$/i.test(timestamp) || Number.isNaN(Date.parse(timestamp))) {
+		throw new NodeOperationError(
+			executeFunctions.getNode(),
+			'Client Timestamp must be a valid timestamp with a timezone.',
+			{ itemIndex },
+		);
+	}
+	return timestamp;
+}
+
+function parseJsonObject(
+	value: unknown,
+	label: string,
+	executeFunctions: IExecuteFunctions,
+	itemIndex: number,
+): Record<string, unknown> {
+	let parsed = value;
+	if (typeof value === 'string') {
+		try {
+			parsed = JSON.parse(value);
+		} catch {
+			throw new NodeOperationError(executeFunctions.getNode(), `${label} must be valid JSON.`, {
+				itemIndex,
+			});
+		}
+	}
+	if (!isRecord(parsed)) {
+		throw new NodeOperationError(executeFunctions.getNode(), `${label} must be a JSON object.`, {
+			itemIndex,
+		});
+	}
+	return parsed;
+}
+
+async function agentTokenForCredentials(
+	executeFunctions: IExecuteFunctions,
+	itemIndex: number,
+	credentials: ICredentialDataDecryptedObject,
+	cache: AgentTokenCache | undefined,
+): Promise<{ token?: string; cache?: AgentTokenCache }> {
+	if (credentials.identityMode !== 'auth0M2M') return {};
+	if (cache && cache.expiresAt > Date.now() + 30_000) {
+		return { token: cache.token, cache };
+	}
+
+	let tokenUrl: string;
+	try {
+		tokenUrl = auth0TokenEndpoint(credentials.auth0Issuer);
+	} catch (error) {
+		throw new NodeOperationError(
+			executeFunctions.getNode(),
+			error instanceof Error ? error.message : 'Auth0 Issuer is invalid.',
+			{ itemIndex },
+		);
+	}
+	const audience = String(credentials.auth0Audience ?? '').trim();
+	const clientId = String(credentials.auth0ClientId ?? '').trim();
+	const clientSecret = String(credentials.auth0ClientSecret ?? '');
+	if (!audience || !clientId || !clientSecret) {
+		throw new NodeOperationError(
+			executeFunctions.getNode(),
+			'Auth0 audience, client ID, and client secret are required for agent identity.',
+			{ itemIndex },
+		);
+	}
+
+	let response: Auth0TokenResponse;
+	try {
+		response = (await executeFunctions.helpers.httpRequest({
+			method: 'POST',
+			url: tokenUrl,
+			headers: { 'Content-Type': 'application/json' },
+			body: {
+				grant_type: 'client_credentials',
+				client_id: clientId,
+				client_secret: clientSecret,
+				audience,
+			},
+			json: true,
+			disableFollowRedirect: true,
+			sendCredentialsOnCrossOriginRedirect: false,
+			allowedDomains: new URL(tokenUrl).hostname,
+			timeout: 15_000,
+		})) as Auth0TokenResponse;
+	} catch {
+		throw new NodeOperationError(
+			executeFunctions.getNode(),
+			'Could not obtain the Auth0 agent token. Check the stored Auth0 credential.',
+			{ itemIndex },
+		);
+	}
+
+	if (
+		typeof response?.access_token !== 'string' ||
+		!response.access_token ||
+		(typeof response.token_type === 'string' && response.token_type.toLowerCase() !== 'bearer')
+	) {
+		throw new NodeOperationError(
+			executeFunctions.getNode(),
+			'Auth0 returned an invalid agent token response.',
+			{ itemIndex },
+		);
+	}
+	const expiresIn = Number(response.expires_in);
+	const nextCache = Number.isFinite(expiresIn) && expiresIn > 0
+		? { token: response.access_token, expiresAt: Date.now() + expiresIn * 1_000 }
+		: undefined;
+	return { token: response.access_token, cache: nextCache };
 }
 
 function userIdFromEmail(email: string, pepper: string): string {
@@ -1239,6 +1427,10 @@ export class Allowly implements INodeType {
 					hide: {
 						operation: [
 							'check',
+							'checkAndEnforce',
+							'execute',
+							'getExecution',
+							'acknowledgeReceipt',
 							'createAuthorization',
 							'resolveConfirmation',
 							'resolveEscalation',
@@ -1523,7 +1715,7 @@ export class Allowly implements INodeType {
 					'Stored Allowly authorization ID. The authorization already binds the user, agent, and actions.',
 				displayOptions: {
 					show: {
-						operation: ['check'],
+							operation: ['check', 'checkAndEnforce'],
 					},
 				},
 			},
@@ -1537,7 +1729,7 @@ export class Allowly implements INodeType {
 				placeholder: 'email.send',
 				displayOptions: {
 					show: {
-						operation: ['check'],
+							operation: ['check', 'checkAndEnforce'],
 					},
 				},
 			},
@@ -1549,7 +1741,7 @@ export class Allowly implements INodeType {
 				description: 'Optional target resource for the action, for example gmail:thread:abc123',
 				displayOptions: {
 					show: {
-						operation: ['check'],
+							operation: ['check', 'checkAndEnforce'],
 					},
 				},
 			},
@@ -1561,7 +1753,7 @@ export class Allowly implements INodeType {
 				description: 'Optional workflow or agent-session identifier copied into the signed receipt',
 				displayOptions: {
 					show: {
-						operation: ['check'],
+							operation: ['check', 'checkAndEnforce'],
 					},
 				},
 			},
@@ -1574,7 +1766,7 @@ export class Allowly implements INodeType {
 					'Optional estimated action cost in micro-USD for budgeted authorizations. Leave at -1 to omit; 0 is sent as an explicit zero-cost estimate. Reserved amounts stay charged until a Settle Budget step reports the actual cost.',
 				displayOptions: {
 					show: {
-						operation: ['check'],
+							operation: ['check', 'checkAndEnforce'],
 					},
 				},
 			},
@@ -1587,7 +1779,7 @@ export class Allowly implements INodeType {
 					'Optional n8n workflow context value. Authorization is still determined by Authorization.',
 				displayOptions: {
 					show: {
-						operation: ['check'],
+							operation: ['check', 'checkAndEnforce'],
 					},
 				},
 			},
@@ -1600,7 +1792,7 @@ export class Allowly implements INodeType {
 					'Optional n8n workflow context value. Authorization is still determined by Authorization.',
 				displayOptions: {
 					show: {
-						operation: ['check'],
+							operation: ['check', 'checkAndEnforce'],
 					},
 				},
 			},
@@ -1612,10 +1804,99 @@ export class Allowly implements INodeType {
 				description: 'Optional JSON object copied into the Allowly check context and receipt',
 				displayOptions: {
 					show: {
-						operation: ['check'],
+							operation: ['check', 'checkAndEnforce'],
+						},
 					},
 				},
-			},
+				{
+					displayName: 'Client Timestamp',
+					name: 'clientTimestamp',
+					type: 'string',
+					default: '',
+					description: 'Optional customer-reported event time with a timezone; it does not replace Allowly server time',
+					displayOptions: { show: { operation: ['check', 'checkAndEnforce'] } },
+				},
+				{
+					displayName: 'Operation ID',
+					name: 'executionOperationId',
+					type: 'string',
+					default: '',
+					required: true,
+					description: 'Stable customer operation ID. Reuse it only with the identical destination and payload.',
+					displayOptions: { show: { operation: ['execute', 'getExecution'] } },
+				},
+				{
+					displayName: 'Authorization',
+					name: 'executionAuthorization',
+					type: 'string',
+					default: '',
+					required: true,
+					description: 'Stored Allowly authorization ID for the registered destination action',
+					displayOptions: { show: { operation: ['execute'] } },
+				},
+				{
+					displayName: 'Destination ID',
+					name: 'executionDestinationId',
+					type: 'string',
+					default: '',
+					required: true,
+					description: 'Allowly registered execution destination ID',
+					displayOptions: { show: { operation: ['execute'] } },
+				},
+				{
+					displayName: 'Payload',
+					name: 'executionPayload',
+					type: 'json',
+					default: '={{$json}}',
+					required: true,
+					description: 'Exact JSON object Allowly maps for policy checks and sends to the registered destination',
+					displayOptions: { show: { operation: ['execute'] } },
+				},
+				{
+					displayName: 'Client Timestamp',
+					name: 'executionClientTimestamp',
+					type: 'string',
+					default: '={{$now.toISO()}}',
+					required: true,
+					description: 'Customer-reported event time with a timezone; it does not replace Allowly server time',
+					displayOptions: { show: { operation: ['execute'] } },
+				},
+				{
+					displayName: 'Idempotency Key',
+					name: 'executionIdempotencyKey',
+					type: 'string',
+					default: '',
+					required: true,
+					description: 'Stable retry key. Preserve this key, the Operation ID, and Payload for every retry.',
+					displayOptions: { show: { operation: ['execute'] } },
+				},
+				{
+					displayName: 'Signed Receipt',
+					name: 'ackReceipt',
+					type: 'json',
+					default: '={{$json.receipt}}',
+					required: true,
+					description: 'Complete signed receipt JSON. The node calculates its canonical SHA-256 locally.',
+					displayOptions: { show: { operation: ['acknowledgeReceipt'] } },
+				},
+				{
+					displayName: 'Client Timestamp',
+					name: 'ackClientTimestamp',
+					type: 'string',
+					default: '={{$now.toISO()}}',
+					required: true,
+					description: 'Customer-reported time when this workflow observed the signed receipt',
+					displayOptions: { show: { operation: ['acknowledgeReceipt'] } },
+				},
+				{
+					displayName: 'Idempotency Key',
+					name: 'ackIdempotencyKey',
+					type: 'string',
+					default: '',
+					required: true,
+					description: 'Stable retry key for this exact receipt hash and timestamp',
+					displayOptions: { show: { operation: ['acknowledgeReceipt'] } },
+				},
 			{
 				displayName: 'Check Receipt ID',
 				name: 'checkReceiptId',
@@ -1733,10 +2014,13 @@ export class Allowly implements INodeType {
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
 		const items = this.getInputData();
 		const returnData: INodeExecutionData[] = [];
+		let agentTokenCache: AgentTokenCache | undefined;
 
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex += 1) {
+			let operation = '';
+			let sensitiveValues: string[] = [];
 			try {
-				const operation = this.getNodeParameter('operation', itemIndex) as string;
+				operation = this.getNodeParameter('operation', itemIndex) as string;
 				const idempotencyKey = n8nIdempotencyKey(
 					this.getExecutionId(),
 					this.getNode().name,
@@ -1888,6 +2172,176 @@ export class Allowly implements INodeType {
 				}
 
 				const credentials = await this.getCredentials('allowlyApi', itemIndex);
+				sensitiveValues = [credentials.apiKey, credentials.auth0ClientSecret]
+					.filter((value): value is string => typeof value === 'string' && value.length > 0);
+				let agentToken: string | undefined;
+				if (IDENTITY_OPERATION_NAMES.has(operation)) {
+					const resolved = await agentTokenForCredentials(
+						this,
+						itemIndex,
+						credentials,
+						agentTokenCache,
+					);
+					agentToken = resolved.token;
+					agentTokenCache = resolved.cache;
+					if (agentToken) sensitiveValues.push(agentToken);
+				}
+				const identityHeaders: IDataObject = agentToken
+					? { 'X-Allowly-Agent-Token': agentToken }
+					: {};
+
+				if (operation === 'execute') {
+					const operationId = (
+						this.getNodeParameter('executionOperationId', itemIndex) as string
+					).trim();
+					const authorizationId = (
+						this.getNodeParameter('executionAuthorization', itemIndex) as string
+					).trim();
+					const destinationId = (
+						this.getNodeParameter('executionDestinationId', itemIndex) as string
+					).trim();
+					const requestKey = (
+						this.getNodeParameter('executionIdempotencyKey', itemIndex) as string
+					).trim();
+					if (!operationId || !authorizationId || !destinationId) {
+						throw new NodeOperationError(
+							this.getNode(),
+							'Operation ID, Authorization, and Destination ID are required.',
+							{ itemIndex },
+						);
+					}
+					if (!requestKey || requestKey.length > 128 || /[\r\n]/.test(requestKey)) {
+						throw new NodeOperationError(
+							this.getNode(),
+							'Idempotency Key must contain 1-128 characters without line breaks.',
+							{ itemIndex },
+						);
+					}
+					const payload = parseJsonObject(
+						this.getNodeParameter('executionPayload', itemIndex),
+						'Payload',
+						this,
+						itemIndex,
+					);
+					const timestamp = parseClientTimestamp(
+						this.getNodeParameter('executionClientTimestamp', itemIndex),
+						this,
+						itemIndex,
+						true,
+					);
+					const response = (await this.helpers.httpRequestWithAuthentication.call(
+						this,
+						'allowlyApi',
+						{
+							method: 'POST',
+							url: `${API_URL}/v1/execute`,
+							headers: {
+								'Content-Type': 'application/json',
+								'Idempotency-Key': requestKey,
+								...identityHeaders,
+							},
+							body: {
+								operation_id: operationId,
+								authorization_id: authorizationId,
+								destination_id: destinationId,
+								payload,
+								client_timestamp: timestamp,
+							},
+							json: true,
+							disableFollowRedirect: true,
+							sendCredentialsOnCrossOriginRedirect: false,
+						},
+					)) as Record<string, unknown>;
+					returnData.push({ json: response as IDataObject, pairedItem: { item: itemIndex } });
+					continue;
+				}
+
+				if (operation === 'getExecution') {
+					const operationId = (
+						this.getNodeParameter('executionOperationId', itemIndex) as string
+					).trim();
+					if (!operationId) {
+						throw new NodeOperationError(this.getNode(), 'Operation ID is required.', { itemIndex });
+					}
+					const response = (await this.helpers.httpRequestWithAuthentication.call(
+						this,
+						'allowlyApi',
+						{
+							method: 'GET',
+							url: `${API_URL}/v1/executions/${encodeURIComponent(operationId)}`,
+							headers: identityHeaders,
+							json: true,
+							disableFollowRedirect: true,
+							sendCredentialsOnCrossOriginRedirect: false,
+						},
+					)) as Record<string, unknown>;
+					returnData.push({ json: response as IDataObject, pairedItem: { item: itemIndex } });
+					continue;
+				}
+
+				if (operation === 'acknowledgeReceipt') {
+					const receiptInput = parseJsonObject(
+						this.getNodeParameter('ackReceipt', itemIndex),
+						'Signed Receipt',
+						this,
+						itemIndex,
+					);
+					const receipt = receiptInput.status === 'signed' && isRecord(receiptInput.receipt)
+						? receiptInput.receipt
+						: receiptInput;
+					const receiptId = typeof receipt.receipt_id === 'string' ? receipt.receipt_id.trim() : '';
+					let receiptSha256: string;
+					try {
+						receiptSha256 = sealVerifier.hashSealValue(receipt);
+					} catch {
+						throw new NodeOperationError(
+							this.getNode(),
+							'Signed Receipt cannot be canonicalized safely.',
+							{ itemIndex },
+						);
+					}
+					const requestKey = (
+						this.getNodeParameter('ackIdempotencyKey', itemIndex) as string
+					).trim();
+					if (!receiptId) {
+						throw new NodeOperationError(this.getNode(), 'Receipt ID is required.', { itemIndex });
+					}
+					if (!requestKey || requestKey.length > 128 || /[\r\n]/.test(requestKey)) {
+						throw new NodeOperationError(
+							this.getNode(),
+							'Idempotency Key must contain 1-128 characters without line breaks.',
+							{ itemIndex },
+						);
+					}
+					const timestamp = parseClientTimestamp(
+						this.getNodeParameter('ackClientTimestamp', itemIndex),
+						this,
+						itemIndex,
+						true,
+					);
+					const response = (await this.helpers.httpRequestWithAuthentication.call(
+						this,
+						'allowlyApi',
+						{
+							method: 'POST',
+							url: `${API_URL}/v1/receipts/${encodeURIComponent(receiptId)}/acknowledgments`,
+							headers: {
+								'Content-Type': 'application/json',
+								'Idempotency-Key': requestKey,
+								...identityHeaders,
+							},
+							body: {
+								receipt_sha256: receiptSha256,
+								client_timestamp: timestamp,
+							},
+							json: true,
+							disableFollowRedirect: true,
+							sendCredentialsOnCrossOriginRedirect: false,
+						},
+					)) as Record<string, unknown>;
+					returnData.push({ json: response as IDataObject, pairedItem: { item: itemIndex } });
+					continue;
+				}
 
 				if (operation === 'seal') {
 					const input = recordInput(this, itemIndex);
@@ -2188,6 +2642,12 @@ export class Allowly implements INodeType {
 				const workflowUserId = this.getNodeParameter('workflowUser', itemIndex) as string;
 				const workflowAgentId = this.getNodeParameter('workflowAgent', itemIndex) as string;
 				const context = parseContext(this.getNodeParameter('contextJson', itemIndex), this, itemIndex);
+				const timestamp = parseClientTimestamp(
+					this.getNodeParameter('clientTimestamp', itemIndex),
+					this,
+					itemIndex,
+					false,
+				);
 
 				if (!authorizationId) {
 					throw new NodeOperationError(this.getNode(), 'Authorization is required.', { itemIndex });
@@ -2210,6 +2670,7 @@ export class Allowly implements INodeType {
 				if (sessionId.trim()) body.session_id = sessionId.trim();
 				if (estimatedCostMicros !== null) body.estimated_cost_micros = estimatedCostMicros;
 				if (Object.keys(context).length > 0) body.context = context;
+				if (timestamp) body.client_timestamp = timestamp;
 
 				const options: IHttpRequestOptions = {
 					method: 'POST',
@@ -2217,9 +2678,12 @@ export class Allowly implements INodeType {
 					headers: {
 						'Content-Type': 'application/json',
 						'Idempotency-Key': idempotencyKey,
+						...identityHeaders,
 					},
 					body,
 					json: true,
+					disableFollowRedirect: agentToken !== undefined,
+					sendCredentialsOnCrossOriginRedirect: false,
 				};
 
 				const response = (await this.helpers.httpRequestWithAuthentication.call(
@@ -2228,9 +2692,20 @@ export class Allowly implements INodeType {
 					options,
 				)) as AllowlyCheckResponse;
 				const { action, result } = mostRestrictiveResult(response.results ?? {}, actions);
+				const protectedActionAllowed = result.decision === 'allow';
+				if (operation === 'checkAndEnforce' && !protectedActionAllowed) {
+					const decision = typeof result.decision === 'string' ? result.decision : 'invalid';
+					const reason = typeof result.reason === 'string' ? ` (${result.reason})` : '';
+					throw new NodeOperationError(
+						this.getNode(),
+						`Allowly stopped the protected path: ${decision}${reason}.`,
+						{ itemIndex },
+					);
+				}
 
 				returnData.push({
 					json: {
+						protectedActionAllowed,
 						action,
 						decision: result.decision,
 						reason: result.reason,
@@ -2249,10 +2724,20 @@ export class Allowly implements INodeType {
 					},
 				});
 			} catch (error) {
-				if (this.continueOnFail()) {
+				const rawError = (error as { description?: unknown }).description;
+				let safeError = typeof rawError === 'string'
+					? rawError
+					: error instanceof Error
+						? error.message
+						: String(error);
+				for (const sensitiveValue of sensitiveValues) {
+					safeError = safeError.split(sensitiveValue).join('[REDACTED]');
+				}
+				if (operation !== 'checkAndEnforce' && this.continueOnFail()) {
 					returnData.push({
 						json: {
-							error: (error as { description?: string }).description || (error as Error).message,
+							protectedActionAllowed: false,
+							error: safeError,
 						},
 						pairedItem: {
 							item: itemIndex,
@@ -2263,7 +2748,7 @@ export class Allowly implements INodeType {
 
 				throw new NodeOperationError(
 					this.getNode(),
-					error instanceof Error ? error : String(error),
+					safeError,
 					{ itemIndex },
 				);
 			}
