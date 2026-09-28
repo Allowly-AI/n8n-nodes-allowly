@@ -214,6 +214,8 @@ const MANAGED_OPERATION_OPTIONS: INodePropertyOptions[] = [
 	...LEGACY_OPERATION_OPTIONS,
 ];
 
+const SUPPORTED_OPERATIONS = new Set(MANAGED_OPERATION_OPTIONS.map((option) => option.value));
+
 const MAX_SAFE_INTEGER = 2 ** 53 - 1;
 
 function recordInput(
@@ -1951,10 +1953,10 @@ export class Allowly implements INodeType {
 			let sensitiveValues: string[] = [];
 			try {
 				operation = this.getNodeParameter('operation', itemIndex) as string;
-				if (operation === 'execute' || operation === 'getExecution') {
+				if (!SUPPORTED_OPERATIONS.has(operation)) {
 					throw new NodeOperationError(
 						this.getNode(),
-						'This hosted Execute operation was removed. Use Check & Enforce before a local provider node.',
+						'Unsupported Allowly operation.',
 						{ itemIndex },
 					);
 				}
@@ -2581,7 +2583,7 @@ export class Allowly implements INodeType {
 				for (const sensitiveValue of sensitiveValues) {
 					safeError = safeError.split(sensitiveValue).join('[REDACTED]');
 				}
-				if (!['checkAndEnforce', 'execute', 'getExecution'].includes(operation) && this.continueOnFail()) {
+				if (SUPPORTED_OPERATIONS.has(operation) && operation !== 'checkAndEnforce' && this.continueOnFail()) {
 					returnData.push({
 						json: {
 							protectedActionAllowed: false,

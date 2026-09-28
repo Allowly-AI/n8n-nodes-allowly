@@ -173,10 +173,6 @@ not the provider credential or request. Keep provider credentials in n8n's
 encrypted credential store. This flow has a decision receipt, but no independent
 witness of the provider response.
 
-Existing workflows that used **Execute Registered Destination** or **Get
-Execution** must replace those operations. They now stop with an error rather
-than silently treating the old operation as a check.
-
 ### Acknowledge Receipt
 
 Map the complete signed receipt into **Signed Receipt** after it is available.

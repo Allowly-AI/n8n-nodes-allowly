@@ -393,17 +393,12 @@ function receiptOperationContext(parameters, response = { status: 'succeeded' })
 	};
 }
 
-test('removed Execute operations never dispatch or continue on failure', async () => {
+test('unknown operations never dispatch or continue on failure', async () => {
 	const node = new Allowly();
-	for (const property of node.description.properties.filter((entry) => entry.name === 'operation')) {
-		assert.equal(property.options.some((option) => ['execute', 'getExecution'].includes(option.value)), false);
-	}
-	for (const operation of ['execute', 'getExecution']) {
-		const context = receiptOperationContext({ operation });
-		context.continueOnFail = () => true;
-		await assert.rejects(() => node.execute.call(context), /hosted Execute operation was removed/);
-		assert.equal(context.requests.length, 0);
-	}
+	const context = receiptOperationContext({ operation: 'unsupportedOperation' });
+	context.continueOnFail = () => true;
+	await assert.rejects(() => node.execute.call(context), /Unsupported Allowly operation/);
+	assert.equal(context.requests.length, 0);
 });
 
 test('Acknowledge Receipt binds the exact hash, timestamp, and retry key', async () => {
