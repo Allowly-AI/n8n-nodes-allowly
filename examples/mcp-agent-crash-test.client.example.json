@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "allowly-agent-crash-test": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "REPLACE_WITH_N8N_MCP_PRODUCTION_URL",
+        "--header",
+        "Authorization: Bearer ${N8N_MCP_BEARER_TOKEN}"
+      ],
+      "env": {
+        "N8N_MCP_BEARER_TOKEN": "REPLACE_WITH_MCP_BEARER_TOKEN"
+      }
+    }
+  }
+}

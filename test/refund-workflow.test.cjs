@@ -120,6 +120,18 @@ const checkCalls = (result) => result.requests.filter((call) => call.url.endsWit
 test('refund template is inactive, credential-free, and requires authenticated bounded review', () => {
 	assert.equal(workflow.active, false);
 	assert.deepEqual(workflow.pinData, {});
+	const currentVersion = new Allowly().description.defaultVersion;
+	const allowlyNodes = workflow.nodes.filter((node) => node.type === 'n8n-nodes-allowly.allowly');
+	assert.deepEqual(
+		allowlyNodes.map(({ name, typeVersion, parameters }) => [name, typeVersion, parameters.operation]),
+		[
+			['Check refund', currentVersion, 'check'],
+			['Resolve confirmation', currentVersion, 'resolveConfirmation'],
+			['Resolve escalation', currentVersion, 'resolveEscalation'],
+			['Recheck refund after review', currentVersion, 'check'],
+		],
+	);
+	assert.equal(currentVersion, 2);
 	for (const node of workflow.nodes) {
 		assert.equal(node.credentials, undefined);
 		assert.equal(node.continueOnFail, undefined);

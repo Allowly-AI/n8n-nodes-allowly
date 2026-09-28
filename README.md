@@ -45,6 +45,21 @@ stored authorization, then test allow, deny, confirmation, and escalation paths.
 It binds approval to the refund request, checks again after review, and preserves
 the Stripe result separately from the decision receipt.
 
+## Example: MCP agent crash test
+
+**The poisoned agent called your n8n MCP tool. Zoho Mail never got the call.**
+
+[Import the guarded MCP tool and crash-test one risky action](examples/mcp-agent-crash-test.md).
+The package includes an inactive, credential-free workflow, synthetic inbox and
+customer data, Allowly action/policy setup, and an example MCP client config.
+Only a validated `allow` can reach Zoho Mail through its MCP server; every other decision, a malformed
+response, or an Allowly error stops first.
+
+The workflow uses the verified `n8n-nodes-allowly.allowly` type at node version
+`2`. Read the guide before importing. It explains the exact credential and
+authorization placeholders, the deterministic denied test, and what a signed
+decision receipt does and does not prove.
+
 ## Operations
 
 ### Seal JSON with Managed Webhook
@@ -190,7 +205,7 @@ Report an approved or rejected escalation using its `escalation_id`. **Resolved 
 - **Allowly SEAL Webhook API / Private Webhook URL**: the complete private URL copied from the dashboard. This is the only credential needed for managed sealing and retrieval. Treat it like a password.
 - **Allowly API / API Key**: Allowly runtime key used by the older direct SEAL operations and authorization operations.
 - **Allowly API / User ID Pepper**: optional encrypted value used only by **Mask Email Locally**. Back it up; changing it changes derived user IDs.
-- **Allowly API / Agent Identity**: choose **Auth0 Machine-to-Machine** only for identity-bound authorizations. Keep **API Key Only** for legacy authorizations.
+- **Allowly API / External Identity Provider**: choose **Auth0 Machine-to-Machine** only for identity-bound authorizations. Keep **No External Identity** for authorizations without external identity.
 - **Auth0 Issuer**, **Auth0 Audience**, **Auth0 Client ID**, and **Auth0 Client Secret**: customer Auth0 machine credential stored by n8n. The node validates the exact HTTPS issuer, obtains a short-lived token without following redirects, and reuses it only while unexpired during the current node execution. Secrets and tokens are not returned in items or errors.
 
 Production webhook credentials must use the hosted Allowly API at `https://api.allowly.ai`. For local development only, enable **Allow Local Development URL** on the credential to accept a private URL on `localhost`, `127.0.0.1`, or `::1`. When n8n SSRF protection is enabled, keep `N8N_SSRF_PROTECTION_ENABLED=true` and add only the loopback hostname in use, such as `N8N_SSRF_ALLOWED_HOSTNAMES=localhost`. These advanced settings are not part of customer credential setup.

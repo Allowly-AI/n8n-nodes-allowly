@@ -1,7 +1,7 @@
 # Process Stripe refunds with Allowly approval and reviewer checks
 
 [Import this workflow JSON](stripe-refund-with-approval.json).
-It targets **n8n-nodes-allowly 0.2.1** and uses n8n's standard HTTP, Code, IF,
+It targets **n8n-nodes-allowly 0.3.0** and uses n8n's standard HTTP, Code, IF,
 and Wait nodes. The workflow is inactive and contains no credentials or pinned data.
 Use a self-hosted n8n instance that permits this community node and Code nodes.
 
@@ -44,7 +44,7 @@ See [setup](https://allowly.ai/docs/api-reference/setup-and-tombstones/),
 
 ## 2. Prepare Stripe and import
 
-1. Install `n8n-nodes-allowly` **0.2.1** in n8n, then import the JSON file.
+1. Install `n8n-nodes-allowly` **0.3.0** in n8n, then import the JSON file.
 2. Create a succeeded USD PaymentIntent in Stripe's test mode or sandbox, with
    enough received funds for the scenario. Keep its `pi_...` ID. No payment is
    created by this workflow.
@@ -52,7 +52,8 @@ See [setup](https://allowly.ai/docs/api-reference/setup-and-tombstones/),
    and **Create Stripe test refund**. The workflow rejects a retrieved payment
    unless `livemode` is exactly `false` and the payment ID matches.
 4. Select the **same Allowly API credential** on both Check nodes, both Resolve
-   nodes, and **Fetch decision receipt**.
+   nodes, and **Fetch decision receipt**. Keep **External Identity Provider** set
+   to **No External Identity** unless the stored authorization requires Auth0.
 5. On **Wait for reviewer**, keep Header Auth and select a dedicated **Header Auth**
    credential. Use a header such as `X-Refund-Review-Token` and a private random
    value. Do not use an Allowly or Stripe API key as the review secret. The shared

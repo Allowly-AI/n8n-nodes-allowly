@@ -41,6 +41,7 @@
   },
   "files": [
     "dist",
+    "examples",
     "README.md",
     "THIRD_PARTY_NOTICES.md",
     "VERIFIER_PROVENANCE.json",

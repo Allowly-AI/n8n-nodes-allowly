@@ -218,6 +218,18 @@ test('public Jev workflow is inactive, credential-free, and contains no OpenRout
 	assert.equal(workflow.name, 'Route Stripe refunds with Jev decisions and Allowly guardrails');
 	assert.equal(workflow.active, false);
 	assert.deepEqual(workflow.pinData, {});
+	const currentVersion = new Allowly().description.defaultVersion;
+	const allowlyNodes = workflow.nodes.filter((node) => node.type === 'n8n-nodes-allowly.allowly');
+	assert.deepEqual(
+		allowlyNodes.map(({ name, typeVersion, parameters }) => [name, typeVersion, parameters.operation]),
+		[
+			['Check refund', currentVersion, 'check'],
+			['Resolve confirmation', currentVersion, 'resolveConfirmation'],
+			['Resolve escalation', currentVersion, 'resolveEscalation'],
+			['Recheck refund after review', currentVersion, 'check'],
+		],
+	);
+	assert.equal(currentVersion, 2);
 	assert.equal(workflow.settings.executionOrder, 'v1');
 	assert.equal(new Set(workflow.nodes.map((node) => node.name)).size, workflow.nodes.length);
 	assert.equal(new Set(workflow.nodes.map((node) => node.id)).size, workflow.nodes.length);

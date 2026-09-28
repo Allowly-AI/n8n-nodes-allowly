@@ -19,7 +19,7 @@ values and records the resulting action decision. Only an Allowly `allow` can
 reach Stripe.
 
 The workflow is inactive, has no credentials or pinned data, and supports one
-refund request per execution. It targets **n8n-nodes-allowly 0.2.1** and Stripe
+refund request per execution. It targets **n8n-nodes-allowly 0.3.0** and Stripe
 test mode. Keep the original
 [refund workflow](stripe-refund-with-approval.md) for a demo without Jev.
 
@@ -103,14 +103,15 @@ new authorization for every refund.
 
 ## Import and run the free demo
 
-1. Install `n8n-nodes-allowly` **0.2.1** on a self-hosted n8n instance that
+1. Install `n8n-nodes-allowly` **0.3.0** on a self-hosted n8n instance that
    permits Code nodes, then import the JSON.
 2. Create a succeeded USD PaymentIntent in Stripe test mode with enough received
    funds. No payment is created by this workflow.
 3. Select the same Stripe test credential on **Read Stripe payment** and
    **Create Stripe test refund**.
 4. Select the same Allowly API credential on both Check nodes, both Resolve
-   nodes, and **Fetch decision receipt**.
+   nodes, and **Fetch decision receipt**. Keep **External Identity Provider** set
+   to **No External Identity** unless the stored authorization requires Auth0.
 5. On **Wait for reviewer**, select a dedicated Header Auth credential. Keep its
    secret separate from the Stripe, Allowly, and OpenRouter keys.
 6. Edit **Refund request** with the stored authorization, Stripe test PaymentIntent,
