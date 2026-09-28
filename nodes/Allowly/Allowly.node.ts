@@ -112,8 +112,6 @@ const DECISION_ORDER: Record<string, number> = { allow: 0, confirm: 1, escalate:
 const IDENTITY_OPERATION_NAMES = new Set([
 	'check',
 	'checkAndEnforce',
-	'execute',
-	'getExecution',
 	'acknowledgeReceipt',
 ]);
 
@@ -149,18 +147,6 @@ const LEGACY_OPERATION_OPTIONS: INodePropertyOptions[] = [
 		value: 'checkAndEnforce',
 		description: 'Release output only for an Allowly allow decision; every other outcome stops',
 		action: 'Check and enforce an authorization',
-	},
-	{
-		name: 'Execute Registered Destination',
-		value: 'execute',
-		description: 'Ask Allowly to decide and dispatch one registered destination',
-		action: 'Execute a registered destination',
-	},
-	{
-		name: 'Get Execution',
-		value: 'getExecution',
-		description: 'Retrieve a stored managed execution without dispatching it again',
-		action: 'Get an execution',
 	},
 	{
 		name: 'Acknowledge Receipt',
@@ -1428,8 +1414,6 @@ export class Allowly implements INodeType {
 						operation: [
 							'check',
 							'checkAndEnforce',
-							'execute',
-							'getExecution',
 							'acknowledgeReceipt',
 							'createAuthorization',
 							'resolveConfirmation',
@@ -1817,60 +1801,6 @@ export class Allowly implements INodeType {
 					displayOptions: { show: { operation: ['check', 'checkAndEnforce'] } },
 				},
 				{
-					displayName: 'Operation ID',
-					name: 'executionOperationId',
-					type: 'string',
-					default: '',
-					required: true,
-					description: 'Stable customer operation ID. Reuse it only with the identical destination and payload.',
-					displayOptions: { show: { operation: ['execute', 'getExecution'] } },
-				},
-				{
-					displayName: 'Authorization',
-					name: 'executionAuthorization',
-					type: 'string',
-					default: '',
-					required: true,
-					description: 'Stored Allowly authorization ID for the registered destination action',
-					displayOptions: { show: { operation: ['execute'] } },
-				},
-				{
-					displayName: 'Destination ID',
-					name: 'executionDestinationId',
-					type: 'string',
-					default: '',
-					required: true,
-					description: 'Allowly registered execution destination ID',
-					displayOptions: { show: { operation: ['execute'] } },
-				},
-				{
-					displayName: 'Payload',
-					name: 'executionPayload',
-					type: 'json',
-					default: '={{$json}}',
-					required: true,
-					description: 'Exact JSON object Allowly maps for policy checks and sends to the registered destination',
-					displayOptions: { show: { operation: ['execute'] } },
-				},
-				{
-					displayName: 'Client Timestamp',
-					name: 'executionClientTimestamp',
-					type: 'string',
-					default: '={{$now.toISO()}}',
-					required: true,
-					description: 'Customer-reported event time with a timezone; it does not replace Allowly server time',
-					displayOptions: { show: { operation: ['execute'] } },
-				},
-				{
-					displayName: 'Idempotency Key',
-					name: 'executionIdempotencyKey',
-					type: 'string',
-					default: '',
-					required: true,
-					description: 'Stable retry key. Preserve this key, the Operation ID, and Payload for every retry.',
-					displayOptions: { show: { operation: ['execute'] } },
-				},
-				{
 					displayName: 'Signed Receipt',
 					name: 'ackReceipt',
 					type: 'json',
@@ -2021,6 +1951,13 @@ export class Allowly implements INodeType {
 			let sensitiveValues: string[] = [];
 			try {
 				operation = this.getNodeParameter('operation', itemIndex) as string;
+				if (operation === 'execute' || operation === 'getExecution') {
+					throw new NodeOperationError(
+						this.getNode(),
+						'This hosted Execute operation was removed. Use Check & Enforce before a local provider node.',
+						{ itemIndex },
+					);
+				}
 				const idempotencyKey = n8nIdempotencyKey(
 					this.getExecutionId(),
 					this.getNode().name,
@@ -2189,95 +2126,6 @@ export class Allowly implements INodeType {
 				const identityHeaders: IDataObject = identityToken
 					? { 'X-Allowly-Agent-Token': identityToken }
 					: {};
-
-				if (operation === 'execute') {
-					const operationId = (
-						this.getNodeParameter('executionOperationId', itemIndex) as string
-					).trim();
-					const authorizationId = (
-						this.getNodeParameter('executionAuthorization', itemIndex) as string
-					).trim();
-					const destinationId = (
-						this.getNodeParameter('executionDestinationId', itemIndex) as string
-					).trim();
-					const requestKey = (
-						this.getNodeParameter('executionIdempotencyKey', itemIndex) as string
-					).trim();
-					if (!operationId || !authorizationId || !destinationId) {
-						throw new NodeOperationError(
-							this.getNode(),
-							'Operation ID, Authorization, and Destination ID are required.',
-							{ itemIndex },
-						);
-					}
-					if (!requestKey || requestKey.length > 128 || /[\r\n]/.test(requestKey)) {
-						throw new NodeOperationError(
-							this.getNode(),
-							'Idempotency Key must contain 1-128 characters without line breaks.',
-							{ itemIndex },
-						);
-					}
-					const payload = parseJsonObject(
-						this.getNodeParameter('executionPayload', itemIndex),
-						'Payload',
-						this,
-						itemIndex,
-					);
-					const timestamp = parseClientTimestamp(
-						this.getNodeParameter('executionClientTimestamp', itemIndex),
-						this,
-						itemIndex,
-						true,
-					);
-					const response = (await this.helpers.httpRequestWithAuthentication.call(
-						this,
-						'allowlyApi',
-						{
-							method: 'POST',
-							url: `${API_URL}/v1/execute`,
-							headers: {
-								'Content-Type': 'application/json',
-								'Idempotency-Key': requestKey,
-								...identityHeaders,
-							},
-							body: {
-								operation_id: operationId,
-								authorization_id: authorizationId,
-								destination_id: destinationId,
-								payload,
-								client_timestamp: timestamp,
-							},
-							json: true,
-							disableFollowRedirect: true,
-							sendCredentialsOnCrossOriginRedirect: false,
-						},
-					)) as Record<string, unknown>;
-					returnData.push({ json: response as IDataObject, pairedItem: { item: itemIndex } });
-					continue;
-				}
-
-				if (operation === 'getExecution') {
-					const operationId = (
-						this.getNodeParameter('executionOperationId', itemIndex) as string
-					).trim();
-					if (!operationId) {
-						throw new NodeOperationError(this.getNode(), 'Operation ID is required.', { itemIndex });
-					}
-					const response = (await this.helpers.httpRequestWithAuthentication.call(
-						this,
-						'allowlyApi',
-						{
-							method: 'GET',
-							url: `${API_URL}/v1/executions/${encodeURIComponent(operationId)}`,
-							headers: identityHeaders,
-							json: true,
-							disableFollowRedirect: true,
-							sendCredentialsOnCrossOriginRedirect: false,
-						},
-					)) as Record<string, unknown>;
-					returnData.push({ json: response as IDataObject, pairedItem: { item: itemIndex } });
-					continue;
-				}
 
 				if (operation === 'acknowledgeReceipt') {
 					const receiptInput = parseJsonObject(
@@ -2733,7 +2581,7 @@ export class Allowly implements INodeType {
 				for (const sensitiveValue of sensitiveValues) {
 					safeError = safeError.split(sensitiveValue).join('[REDACTED]');
 				}
-				if (operation !== 'checkAndEnforce' && this.continueOnFail()) {
+				if (!['checkAndEnforce', 'execute', 'getExecution'].includes(operation) && this.continueOnFail()) {
 					returnData.push({
 						json: {
 							protectedActionAllowed: false,

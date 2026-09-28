@@ -164,19 +164,18 @@ error output or **Continue On Fail** path to the protected action. This operatio
 also throws on non-allow when **Continue On Fail** is set, but workflow
 configuration remains customer-controlled.
 
-### Execute Registered Destination
+### Run a provider action
 
-Calls `POST /v1/execute` with the authorization, registered destination, exact
-payload, required timezone-aware **Client Timestamp**, and caller-provided
-**Operation ID** and **Idempotency Key**. The node does not call the downstream
-service itself. Do not add a second action node for the same side effect.
+Place **Check & Enforce** immediately before a provider node in the same
+workflow. Only an exact `allow` releases the item. n8n runs the provider node
+with its own credential; Allowly receives the policy fields and decision record,
+not the provider credential or request. Keep provider credentials in n8n's
+encrypted credential store. This flow has a decision receipt, but no independent
+witness of the provider response.
 
-Persist the operation ID, idempotency key, and exact payload together. Preserve
-all three on retries. `confirmation_required` and `escalation_required` expose
-the API's review fields without dispatching. `unknown` means the destination may
-or may not have acted; use **Get Execution** with the same operation ID and do
-not resend under a new ID. `succeeded` means the destination returned a 2xx HTTP
-status and does not prove business completion.
+Existing workflows that used **Execute Registered Destination** or **Get
+Execution** must replace those operations. They now stop with an error rather
+than silently treating the old operation as a check.
 
 ### Acknowledge Receipt
 

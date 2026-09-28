@@ -373,7 +373,7 @@ test('Check & Enforce returns only allow and ignores Continue On Fail for non-al
 	);
 });
 
-function managedOperationContext(parameters, response = { status: 'succeeded' }) {
+function receiptOperationContext(parameters, response = { status: 'succeeded' }) {
 	const requests = [];
 	return {
 		requests,
@@ -393,51 +393,23 @@ function managedOperationContext(parameters, response = { status: 'succeeded' })
 	};
 }
 
-test('Execute calls only the Allowly gateway with stable caller keys and exact payload', async () => {
-	const context = managedOperationContext({
-		operation: 'execute',
-		executionOperationId: 'customer-operation-123',
-		executionAuthorization: 'auth_123',
-		executionDestinationId: 'dst_123',
-		executionPayload: { order: { id: 'ord_123' } },
-		executionClientTimestamp: '2026-09-24T20:01:02.123Z',
-		executionIdempotencyKey: 'order-ord_123-attempt-1',
-	});
-
-	await new Allowly().execute.call(context);
-
-	assert.equal(context.requests.length, 1);
-	assert.equal(context.requests[0].url, 'https://api.allowly.ai/v1/execute');
-	assert.equal(context.requests[0].headers['Idempotency-Key'], 'order-ord_123-attempt-1');
-	assert.deepEqual(context.requests[0].body, {
-		operation_id: 'customer-operation-123',
-		authorization_id: 'auth_123',
-		destination_id: 'dst_123',
-		payload: { order: { id: 'ord_123' } },
-		client_timestamp: '2026-09-24T20:01:02.123Z',
-	});
-	assert.equal(Object.hasOwn(context.requests[0].body, 'resource'), false);
-	assert.equal(Object.hasOwn(context.requests[0].body, 'context'), false);
-});
-
-test('Execute rejects a timezone-free timestamp before gateway dispatch', async () => {
-	const context = managedOperationContext({
-		operation: 'execute',
-		executionOperationId: 'customer-operation-123',
-		executionAuthorization: 'auth_123',
-		executionDestinationId: 'dst_123',
-		executionPayload: { order: { id: 'ord_123' } },
-		executionClientTimestamp: '2026-09-24T20:01:02',
-		executionIdempotencyKey: 'order-ord_123-attempt-1',
-	});
-	await assert.rejects(() => new Allowly().execute.call(context), /timezone/);
-	assert.equal(context.requests.length, 0);
+test('removed Execute operations never dispatch or continue on failure', async () => {
+	const node = new Allowly();
+	for (const property of node.description.properties.filter((entry) => entry.name === 'operation')) {
+		assert.equal(property.options.some((option) => ['execute', 'getExecution'].includes(option.value)), false);
+	}
+	for (const operation of ['execute', 'getExecution']) {
+		const context = receiptOperationContext({ operation });
+		context.continueOnFail = () => true;
+		await assert.rejects(() => node.execute.call(context), /hosted Execute operation was removed/);
+		assert.equal(context.requests.length, 0);
+	}
 });
 
 test('Acknowledge Receipt binds the exact hash, timestamp, and retry key', async () => {
 	const receipt = { receipt_id: 'rcp_123', issued_at: '2026-09-24T20:02:00Z', signature: 'signed' };
 	const hash = require('../dist/nodes/Allowly/seal-verifier.js').hashSealValue(receipt);
-	const context = managedOperationContext({
+	const context = receiptOperationContext({
 		operation: 'acknowledgeReceipt',
 		ackReceipt: receipt,
 		ackClientTimestamp: '2026-09-24T20:02:03.456Z',
