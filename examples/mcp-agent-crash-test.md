@@ -27,28 +27,55 @@ Use a test n8n project and a Zoho Mail account reserved for testing. The supplie
 Install the current package release:
 
 ```text
-n8n-nodes-allowly@0.3.0
+n8n-nodes-allowly@0.4.0
 ```
 
-Apply the bundled action and policy from a terminal where the Allowly CLI is signed in:
+Version **0.4.0** supports native **Allowly Identity**, Auth0, and unbound
+authorizations through the **Identity** selector.
+
+Apply the bundled action and policy from a signed-in Allowly CLI:
 
 ```bash
+allowly login
 allowly actions apply examples/mcp-agent-crash-test.allowly.setup.json
 allowly policies apply examples/mcp-agent-crash-test.allowly.setup.json
 ```
+
+For native identity,
+[enroll the policy's agent](../README.md#set-up-allowly-identity-for-agent-workflows):
+
+```bash
+allowly agent enroll n8n_mcp_agent --out /secure/path/credential.json
+```
+
+Complete enrollment before running **Create test authorization** so the new
+authorization records the native identity. Enrollment uses the CLI setup login;
+runtime checks still need a workspace API key. The CLI is not needed on the n8n
+runtime host. Keep the private file out of source control, workflow JSON, items,
+and logs. Enrollment can depend on the target runtime's rollout settings and
+agent/key limits; see the linked guide for resuming a pending enrollment.
 
 The policy denies a detected customer export, pauses other external sends for confirmation, and limits allowed sends to five per day. The `.example.invalid` detector is only a deterministic demo signal. It is not a data-loss-prevention system.
 
 ## Import and configure
 
 1. In n8n, choose **Import from File** and import `examples/mcp-agent-crash-test.json`. It arrives inactive.
-2. Create an **Allowly API** credential with a runtime API key. Select it on **Create test authorization** and **Allowly checks before Zoho Mail**. Keep **External Identity Provider** set to **No External Identity** unless the policy requires Auth0.
+2. Create an **Allowly API** credential with a runtime API key. For native identity, set **Identity** to **Allowly Identity** and paste the complete, successfully enrolled JSON into **Allowly Identity Credential**. Use **No External Identity** for an unbound authorization or **Auth0 Machine-to-Machine** for an Auth0 binding. Select the credential on **Create test authorization** and **Allowly checks before Zoho Mail**.
 3. Create a **Bearer Auth** credential for **MCP Server Trigger**. Use a new random token and keep it out of the workflow export.
 4. On **Release parameters**, replace the MCP endpoint, verified Druim account ID, and verified From-address placeholders. This trusted node overwrites any same-named fields supplied by a caller.
 5. On **Zoho Mail — only explicit allow**, select an **MCP OAuth2 API** credential authorized for that Zoho Mail MCP server. The node reads its endpoint, account ID, and From address only from **Release parameters**. The bundled denied run does not call Zoho Mail.
 6. Run the complete workflow from **Test workflow**. Do not run the Zoho Mail node by itself.
 
 The manual test creates a short-lived authorization, builds the synthetic export attempt, and should stop at **DENIED or paused — Zoho Mail not called**. In the execution view, the Zoho Mail MCP Client node must remain unexecuted.
+
+The credential's **Test** button only tests the API key. With a native credential,
+the manual workflow's **Check** validates identity against the bound
+authorization and writes a decision receipt. Confirm that it denies the export
+for the configured policy, rather than failing identity validation.
+
+Enrollment does not bind authorizations created earlier. To migrate, create a
+new or replacement authorization after enrollment and update the stored ID in
+the workflow-tool node. A native credential cannot be used with an unbound grant.
 
 ## Connect an MCP client
 

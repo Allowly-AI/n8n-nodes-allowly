@@ -13,6 +13,7 @@ import type {
 	INodeTypeDescription,
 } from 'n8n-workflow';
 import { ApplicationError, NodeConnectionTypes, NodeOperationError, sleep } from 'n8n-workflow';
+import { nativeAgentToken, nativeCredentialSecrets } from './native-identity';
 import * as sealVerifier from './seal-verifier.js';
 import type {
 	KeyDocument,
@@ -443,7 +444,15 @@ async function identityTokenForCredentials(
 	credentials: ICredentialDataDecryptedObject,
 	cache: IdentityTokenCache | undefined,
 ): Promise<{ token?: string; cache?: IdentityTokenCache }> {
-	if (credentials.identityMode !== 'auth0M2M') return {};
+	if (credentials.identityMode === 'allowlyNative') {
+		return { token: nativeAgentToken(credentials.nativeAgentCredential) };
+	}
+	if (credentials.identityMode === undefined || credentials.identityMode === 'apiKeyOnly') return {};
+	if (credentials.identityMode !== 'auth0M2M') {
+		throw new NodeOperationError(executeFunctions.getNode(), 'Unsupported Allowly identity mode.', {
+			itemIndex,
+		});
+	}
 	if (cache && cache.expiresAt > Date.now() + 30_000) {
 		return { token: cache.token, cache };
 	}
@@ -2111,7 +2120,8 @@ export class Allowly implements INodeType {
 				}
 
 				const credentials = await this.getCredentials('allowlyApi', itemIndex);
-				sensitiveValues = [credentials.apiKey, credentials.auth0ClientSecret]
+				sensitiveValues = [credentials.apiKey, credentials.auth0ClientSecret,
+					...nativeCredentialSecrets(credentials.nativeAgentCredential)]
 					.filter((value): value is string => typeof value === 'string' && value.length > 0);
 				let identityToken: string | undefined;
 				if (IDENTITY_OPERATION_NAMES.has(operation)) {
