@@ -1,0 +1,49 @@
+{
+  "actions": [
+    {
+      "name": "mcp_demo.email.send",
+      "description": "Send an email through the Allowly n8n MCP crash-test workflow.",
+      "requires_confirm": false,
+      "requires_escalation": false,
+      "constraints_schema": {
+        "context_fields": {
+          "recipient_scope": "string",
+          "recipient_count": "number",
+          "data_class": "string"
+        }
+      }
+    }
+  ],
+  "policies": [
+    {
+      "policy_id": "mcp_agent_crash_test_v1",
+      "agent_id": "n8n_mcp_agent",
+      "description": "Blocks customer-list exports and pauses other external email before the Zoho Mail MCP call can run.",
+      "default_expiry_days": 30,
+      "actions": [
+        {
+          "name": "mcp_demo.email.send",
+          "constraints": {
+            "max_per_day": 5,
+            "deny_when": [
+              {
+                "field": "data_class",
+                "eq": "customer_export"
+              }
+            ],
+            "confirm_when": [
+              {
+                "field": "recipient_scope",
+                "eq": "external"
+              }
+            ]
+          }
+        }
+      ],
+      "requires_confirm_for": [],
+      "requires_escalation_for": [],
+      "requires_deny_for": [],
+      "escalation_targets": {}
+    }
+  ]
+}

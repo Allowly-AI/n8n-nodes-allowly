@@ -9,6 +9,7 @@ const { AllowlyApi } = require('../dist/credentials/AllowlyApi.credentials.js');
 const { AllowlySealWebhookApi } = require('../dist/credentials/AllowlySealWebhookApi.credentials.js');
 const {
 	Allowly,
+	auth0TokenEndpoint,
 	mostRestrictiveResult,
 	n8nIdempotencyKey,
 	parseContext,
@@ -17,6 +18,16 @@ const {
 	testSealWebhookCredential,
 	waitForSignedSeal,
 } = require('../dist/nodes/Allowly/Allowly.node.js');
+
+test('Auth0 issuer validation derives one fixed token endpoint', () => {
+	assert.equal(
+		auth0TokenEndpoint('https://customer.us.auth0.com/'),
+		'https://customer.us.auth0.com/oauth/token',
+	);
+	assert.throws(() => auth0TokenEndpoint('http://customer.auth0.com/'), /HTTPS origin/);
+	assert.throws(() => auth0TokenEndpoint('https://customer.auth0.com/tenant/'), /HTTPS origin/);
+	assert.throws(() => auth0TokenEndpoint('https://customer.auth0.com/?next=evil'), /HTTPS origin/);
+});
 
 async function sealFixture() {
 	const verification = packagedSealVector('verification-v1.json');
@@ -170,6 +181,7 @@ test('check serializes an explicit zero-cost estimate', async () => {
 	await new Allowly().execute.call(context);
 	assert.equal(context.requests[0].body.estimated_cost_micros, 0);
 	assert.ok(Object.hasOwn(context.requests[0].body, 'estimated_cost_micros'));
+	assert.equal(context.requests[0].headers['X-Allowly-Agent-Token'], undefined);
 });
 
 test('check omits the estimate at the -1 default', async () => {
@@ -189,6 +201,225 @@ test('check omits the estimate at the -1 default', async () => {
 	);
 	await new Allowly().execute.call(context);
 	assert.ok(!Object.hasOwn(context.requests[0].body, 'estimated_cost_micros'));
+});
+
+test('workflow identity check acquires an Auth0 token once and keeps it out of output and body', async () => {
+	const tokenRequests = [];
+	const allowlyRequests = [];
+	const parameters = {
+		operation: 'check',
+		authorization: 'auth_123',
+		actions: 'mail.send',
+		resource: 'message:123',
+		session: '',
+		estimatedCostMicros: -1,
+		workflowUser: '',
+		workflowAgent: '',
+		contextJson: {},
+		clientTimestamp: '2026-09-24T18:00:00-07:00',
+	};
+	const context = {
+		getInputData: () => [{ json: {} }, { json: {} }],
+		getCredentials: async () => ({
+			identityMode: 'auth0M2M',
+			auth0Issuer: 'https://customer.us.auth0.com/',
+			auth0Audience: 'https://customer.example/agent-api',
+			auth0ClientId: 'client-id',
+			auth0ClientSecret: 'client-secret',
+		}),
+		getNodeParameter: (name) => parameters[name],
+		getExecutionId: () => 'execution-42',
+		getNode: () => ({ name: 'Allowly' }),
+		continueOnFail: () => false,
+		helpers: {
+			httpRequest: async (options) => {
+				tokenRequests.push(options);
+				return { access_token: 'agent-secret', token_type: 'Bearer', expires_in: 3600 };
+			},
+			httpRequestWithAuthentication: async (_credentials, options) => {
+				allowlyRequests.push(options);
+				return { results: { 'mail.send': { decision: 'allow' } } };
+			},
+		},
+	};
+
+	const [items] = await new Allowly().execute.call(context);
+
+	assert.equal(tokenRequests.length, 1);
+	assert.equal(tokenRequests[0].disableFollowRedirect, true);
+	assert.equal(tokenRequests[0].sendCredentialsOnCrossOriginRedirect, false);
+	assert.deepEqual(tokenRequests[0].body, {
+		grant_type: 'client_credentials',
+		client_id: 'client-id',
+		client_secret: 'client-secret',
+		audience: 'https://customer.example/agent-api',
+	});
+	assert.equal(allowlyRequests.length, 2);
+	assert.equal(allowlyRequests[0].headers['X-Allowly-Agent-Token'], 'agent-secret');
+	assert.equal(allowlyRequests[0].body.client_timestamp, '2026-09-24T18:00:00-07:00');
+	assert.equal(JSON.stringify(allowlyRequests[0].body).includes('agent-secret'), false);
+	assert.equal(JSON.stringify(items).includes('agent-secret'), false);
+	assert.equal(JSON.stringify(items).includes('client-secret'), false);
+});
+
+test('identity credentials use password fields for stored machine credentials', () => {
+	const credential = new AllowlyApi();
+	const provider = credential.properties.find((candidate) => candidate.name === 'identityMode');
+	assert.equal(provider.displayName, 'External Identity Provider');
+	assert.equal(provider.default, 'apiKeyOnly');
+	assert.deepEqual(provider.options.map(({ name, value }) => ({ name, value })), [
+		{ name: 'No External Identity', value: 'apiKeyOnly' },
+		{ name: 'Auth0 Machine-to-Machine', value: 'auth0M2M' },
+	]);
+	for (const name of ['apiKey', 'auth0ClientId', 'auth0ClientSecret']) {
+		const property = credential.properties.find((candidate) => candidate.name === name);
+		assert.equal(property.typeOptions.password, true, name);
+	}
+});
+
+test('identity request failures redact runtime, Auth0, and identity tokens from errors', async () => {
+	function failingContext(continueOnFail) {
+		return {
+			getInputData: () => [{ json: {} }],
+			getCredentials: async () => ({
+				apiKey: 'runtime-secret',
+				identityMode: 'auth0M2M',
+				auth0Issuer: 'https://customer.us.auth0.com/',
+				auth0Audience: 'https://customer.example/agent-api',
+				auth0ClientId: 'client-id',
+				auth0ClientSecret: 'client-secret',
+			}),
+			getNodeParameter: (name) => ({
+				operation: 'check',
+				authorization: 'auth_123',
+				actions: 'mail.send',
+				resource: '',
+				session: '',
+				estimatedCostMicros: -1,
+				workflowUser: '',
+				workflowAgent: '',
+				contextJson: {},
+				clientTimestamp: '',
+			}[name]),
+			getExecutionId: () => 'execution-42',
+			getNode: () => ({ name: 'Allowly' }),
+			continueOnFail: () => continueOnFail,
+			helpers: {
+				httpRequest: async () => ({ access_token: 'agent-secret', token_type: 'Bearer' }),
+				httpRequestWithAuthentication: async () => {
+					throw new Error('bad runtime-secret client-secret agent-secret');
+				},
+			},
+		};
+	}
+
+	const [items] = await new Allowly().execute.call(failingContext(true));
+	const itemError = JSON.stringify(items[0].json);
+	assert.equal(itemError.includes('runtime-secret'), false);
+	assert.equal(itemError.includes('client-secret'), false);
+	assert.equal(itemError.includes('agent-secret'), false);
+	assert.match(itemError, /REDACTED/);
+
+	await assert.rejects(
+		() => new Allowly().execute.call(failingContext(false)),
+		(error) => {
+			const rendered = String(error);
+			return !rendered.includes('runtime-secret')
+				&& !rendered.includes('client-secret')
+				&& !rendered.includes('agent-secret')
+				&& rendered.includes('REDACTED');
+		},
+	);
+});
+
+test('Check & Enforce returns only allow and ignores Continue On Fail for non-allow', async () => {
+	const allowed = checkContext(
+		{
+			operation: 'checkAndEnforce',
+			authorization: 'auth_123',
+			actions: 'mail.send',
+			resource: '',
+			session: '',
+			estimatedCostMicros: -1,
+			workflowUser: '',
+			workflowAgent: '',
+			contextJson: {},
+			clientTimestamp: '',
+		},
+		{ results: { 'mail.send': { decision: 'allow' } } },
+	);
+	const [items] = await new Allowly().execute.call(allowed);
+	assert.equal(items[0].json.protectedActionAllowed, true);
+
+	const denied = checkContext(
+		{
+			operation: 'checkAndEnforce',
+			authorization: 'auth_123',
+			actions: 'mail.send',
+			resource: '',
+			session: '',
+			estimatedCostMicros: -1,
+			workflowUser: '',
+			workflowAgent: '',
+			contextJson: {},
+			clientTimestamp: '',
+		},
+		{ results: { 'mail.send': { decision: 'confirm', reason: 'confirmation_required' } } },
+	);
+	denied.continueOnFail = () => true;
+	await assert.rejects(
+		() => new Allowly().execute.call(denied),
+		/Allowly stopped the protected path: confirm/,
+	);
+});
+
+function receiptOperationContext(parameters, response = { status: 'succeeded' }) {
+	const requests = [];
+	return {
+		requests,
+		getInputData: () => [{ json: {} }],
+		getCredentials: async () => ({}),
+		getNodeParameter: (name) => parameters[name],
+		getExecutionId: () => 'execution-42',
+		getNode: () => ({ name: 'Allowly' }),
+		continueOnFail: () => false,
+		helpers: {
+			httpRequest: async () => { throw new Error('unexpected Auth0 request'); },
+			httpRequestWithAuthentication: async (_credentials, options) => {
+				requests.push(options);
+				return response;
+			},
+		},
+	};
+}
+
+test('unknown operations never dispatch or continue on failure', async () => {
+	const node = new Allowly();
+	const context = receiptOperationContext({ operation: 'unsupportedOperation' });
+	context.continueOnFail = () => true;
+	await assert.rejects(() => node.execute.call(context), /Unsupported Allowly operation/);
+	assert.equal(context.requests.length, 0);
+});
+
+test('Acknowledge Receipt binds the exact hash, timestamp, and retry key', async () => {
+	const receipt = { receipt_id: 'rcp_123', issued_at: '2026-09-24T20:02:00Z', signature: 'signed' };
+	const hash = require('../dist/nodes/Allowly/seal-verifier.js').hashSealValue(receipt);
+	const context = receiptOperationContext({
+		operation: 'acknowledgeReceipt',
+		ackReceipt: receipt,
+		ackClientTimestamp: '2026-09-24T20:02:03.456Z',
+		ackIdempotencyKey: 'ack-rcp_123',
+	});
+	await new Allowly().execute.call(context);
+	assert.equal(
+		context.requests[0].url,
+		'https://api.allowly.ai/v1/receipts/rcp_123/acknowledgments',
+	);
+	assert.equal(context.requests[0].headers['Idempotency-Key'], 'ack-rcp_123');
+	assert.deepEqual(context.requests[0].body, {
+		receipt_sha256: hash,
+		client_timestamp: '2026-09-24T20:02:03.456Z',
+	});
 });
 
 test('idempotency keys are stable per execution item', () => {

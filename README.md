@@ -16,7 +16,7 @@ On self-hosted n8n, an Owner or Admin can install the package:
 3. Install the current release:
 
 ```text
-n8n-nodes-allowly@0.2.1
+n8n-nodes-allowly@0.3.0
 ```
 
 The verified integration page is at
@@ -40,10 +40,25 @@ retrieval.
 ## Example: Stripe refunds with review
 
 The [Stripe test-refund example](examples/stripe-refund-with-approval.md) targets
-`n8n-nodes-allowly` **0.2.1**. Import the workflow, configure credentials and a
+`n8n-nodes-allowly` **0.3.0**. Import the workflow, configure credentials and a
 stored authorization, then test allow, deny, confirmation, and escalation paths.
 It binds approval to the refund request, checks again after review, and preserves
 the Stripe result separately from the decision receipt.
+
+## Example: MCP agent crash test
+
+**The poisoned agent called your n8n MCP tool. Zoho Mail never got the call.**
+
+[Import the guarded MCP tool and crash-test one risky action](examples/mcp-agent-crash-test.md).
+The package includes an inactive, credential-free workflow, synthetic inbox and
+customer data, Allowly action/policy setup, and an example MCP client config.
+Only a validated `allow` can reach Zoho Mail through its MCP server; every other decision, a malformed
+response, or an Allowly error stops first.
+
+The workflow uses the verified `n8n-nodes-allowly.allowly` type at node version
+`2`. Read the guide before importing. It explains the exact credential and
+authorization placeholders, the deterministic denied test, and what a signed
+decision receipt does and does not prove.
 
 ## Operations
 
@@ -122,6 +137,7 @@ Authorization: Bearer allowly_l1_s001_...
   "authorization_id": "auth_...",
   "actions": ["email.send"],
   "resource": "gmail:thread:abc123",
+  "client_timestamp": "2026-09-24T20:01:02.123Z",
   "context": {
     "workflow_user_id": "user_123",
     "workflow_agent_id": "sales-copilot"
@@ -134,6 +150,36 @@ Allowly authorizes from `authorization_id`. The user, agent, allowed actions, ex
 For `confirm`, map `confirmNonce` into **Resolve Confirmation**. For `escalate`, map `escalationId` into **Resolve Escalation**. After approval or resolution, run a second **Check** node with a different node name so it receives a fresh idempotency key; replaying the first key returns the first decision.
 
 Docs: [Check API](https://allowly.ai/docs/api-reference/check/) and [decisions and attributes](https://allowly.ai/docs/api-reference/decisions-and-attributes/).
+
+### Check & Enforce
+
+Uses the same inputs as **Check**, but releases an item only when the selected
+result is exactly `allow`. `deny`, `confirm`, `escalate`, a missing or malformed
+result, and request failure stop the node. Confirmation and escalation must use
+their existing resolution actions and a fresh check; they are never treated as
+allow.
+
+n8n still lets workflow owners create other routes. Do not connect a node-level
+error output or **Continue On Fail** path to the protected action. This operation
+also throws on non-allow when **Continue On Fail** is set, but workflow
+configuration remains customer-controlled.
+
+### Run a provider action
+
+Place **Check & Enforce** immediately before a provider node in the same
+workflow. Only an exact `allow` releases the item. n8n runs the provider node
+with its own credential; Allowly receives the policy fields and decision record,
+not the provider credential or request. Keep provider credentials in n8n's
+encrypted credential store. This flow has a decision receipt, but no independent
+witness of the provider response.
+
+### Acknowledge Receipt
+
+Map the complete signed receipt into **Signed Receipt** after it is available.
+The node computes the canonical SHA-256 locally, then records the hash and the
+required customer-reported **Client Timestamp** through the acknowledgment API.
+The resulting evidence records an authenticated workflow report. It is not a
+customer signature.
 
 ### Settle Budget
 
@@ -154,6 +200,8 @@ Report an approved or rejected escalation using its `escalation_id`. **Resolved 
 - **Allowly SEAL Webhook API / Private Webhook URL**: the complete private URL copied from the dashboard. This is the only credential needed for managed sealing and retrieval. Treat it like a password.
 - **Allowly API / API Key**: Allowly runtime key used by the older direct SEAL operations and authorization operations.
 - **Allowly API / User ID Pepper**: optional encrypted value used only by **Mask Email Locally**. Back it up; changing it changes derived user IDs.
+- **Allowly API / External Identity Provider**: choose **Auth0 Machine-to-Machine** only for identity-bound authorizations. Keep **No External Identity** for authorizations without external identity.
+- **Auth0 Issuer**, **Auth0 Audience**, **Auth0 Client ID**, and **Auth0 Client Secret**: customer Auth0 machine credential stored by n8n. The node validates the exact HTTPS issuer, obtains a short-lived token without following redirects, and reuses it only while unexpired during the current node execution. Secrets and tokens are not returned in items or errors.
 
 Production webhook credentials must use the hosted Allowly API at `https://api.allowly.ai`. For local development only, enable **Allow Local Development URL** on the credential to accept a private URL on `localhost`, `127.0.0.1`, or `::1`. When n8n SSRF protection is enabled, keep `N8N_SSRF_PROTECTION_ENABLED=true` and add only the loopback hostname in use, such as `N8N_SSRF_ALLOWED_HOSTNAMES=localhost`. These advanced settings are not part of customer credential setup.
 
@@ -192,6 +240,7 @@ Production webhook credentials must use the hosted Allowly API at `https://api.a
 - **Workflow User**: optional n8n workflow context field for traceability.
 - **Workflow Agent**: optional n8n workflow context field for traceability.
 - **Additional Context JSON**: optional JSON object copied into the Allowly check context and receipt.
+- **Client Timestamp**: optional timezone-aware, customer-reported event time. It never replaces Allowly's receipt time.
 
 ### Settle Budget fields
 
