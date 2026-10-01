@@ -27,11 +27,11 @@ Use a test n8n project and a Zoho Mail account reserved for testing. The supplie
 Install the current package release:
 
 ```text
-n8n-nodes-allowly@0.3.0
+n8n-nodes-allowly@0.4.0
 ```
 
-Native identity setup below requires an unreleased build with **Allowly Identity**.
-Published **0.3.0** supports the unbound and Auth0 paths.
+Version **0.4.0** supports native **Allowly Identity**, Auth0, and unbound
+authorizations through the **Identity** selector.
 
 Apply the bundled action and policy from a signed-in Allowly CLI:
 
@@ -41,7 +41,7 @@ allowly actions apply examples/mcp-agent-crash-test.allowly.setup.json
 allowly policies apply examples/mcp-agent-crash-test.allowly.setup.json
 ```
 
-For native identity, use a build with **Allowly Identity** and
+For native identity,
 [enroll the policy's agent](../README.md#set-up-allowly-identity-for-agent-workflows):
 
 ```bash
@@ -60,7 +60,7 @@ The policy denies a detected customer export, pauses other external sends for co
 ## Import and configure
 
 1. In n8n, choose **Import from File** and import `examples/mcp-agent-crash-test.json`. It arrives inactive.
-2. Create an **Allowly API** credential with a runtime API key. In a native build, set **Identity** to **Allowly Identity** and paste the complete, successfully enrolled JSON into **Allowly Identity Credential**. Use **No External Identity** for an unbound authorization or **Auth0 Machine-to-Machine** for an Auth0 binding. Select the credential on **Create test authorization** and **Allowly checks before Zoho Mail**. In published **0.3.0**, this selector is named **External Identity Provider**.
+2. Create an **Allowly API** credential with a runtime API key. For native identity, set **Identity** to **Allowly Identity** and paste the complete, successfully enrolled JSON into **Allowly Identity Credential**. Use **No External Identity** for an unbound authorization or **Auth0 Machine-to-Machine** for an Auth0 binding. Select the credential on **Create test authorization** and **Allowly checks before Zoho Mail**.
 3. Create a **Bearer Auth** credential for **MCP Server Trigger**. Use a new random token and keep it out of the workflow export.
 4. On **Release parameters**, replace the MCP endpoint, verified Druim account ID, and verified From-address placeholders. This trusted node overwrites any same-named fields supplied by a caller.
 5. On **Zoho Mail — only explicit allow**, select an **MCP OAuth2 API** credential authorized for that Zoho Mail MCP server. The node reads its endpoint, account ID, and From address only from **Release parameters**. The bundled denied run does not call Zoho Mail.

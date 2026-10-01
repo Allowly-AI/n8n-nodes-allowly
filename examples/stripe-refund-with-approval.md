@@ -1,14 +1,12 @@
 # Process Stripe refunds with Allowly approval and reviewer checks
 
 [Import this workflow JSON](stripe-refund-with-approval.json).
-It targets **n8n-nodes-allowly 0.3.0** and uses n8n's standard HTTP, Code, IF,
+It targets **n8n-nodes-allowly 0.4.0** and uses n8n's standard HTTP, Code, IF,
 and Wait nodes. The workflow is inactive and contains no credentials or pinned data.
 Use a self-hosted n8n instance that permits this community node and Code nodes.
 
-Native identity setup below requires an unreleased build with **Allowly Identity**.
-Published **0.3.0** supports the unbound and Auth0 paths.
-Its selector is named **External Identity Provider**; the native build calls it
-**Identity**.
+Version **0.4.0** supports native **Allowly Identity**, Auth0, and unbound
+authorizations through the **Identity** selector.
 
 A refund request is checked against a stored Allowly authorization. Only `allow`
 reaches Stripe. `deny` stops; `confirm` and `escalate` wait for an authenticated
@@ -61,8 +59,7 @@ See [setup](https://allowly.ai/docs/api-reference/setup-and-tombstones/),
 
 ## 2. Prepare Stripe and import
 
-1. Install `n8n-nodes-allowly` **0.3.0** for unbound or Auth0 authorizations, or
-   use a build with **Allowly Identity** for native identity. Import the JSON file.
+1. Install `n8n-nodes-allowly` **0.4.0** in n8n, then import the JSON file.
 2. Create a succeeded USD PaymentIntent in Stripe's test mode or sandbox, with
    enough received funds for the scenario. Keep its `pi_...` ID. No payment is
    created by this workflow.

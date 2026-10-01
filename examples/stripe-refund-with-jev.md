@@ -19,14 +19,12 @@ values and records the resulting action decision. Only an Allowly `allow` can
 reach Stripe.
 
 The workflow is inactive, has no credentials or pinned data, and supports one
-refund request per execution. It targets **n8n-nodes-allowly 0.3.0** and Stripe
+refund request per execution. It targets **n8n-nodes-allowly 0.4.0** and Stripe
 test mode. Keep the original
 [refund workflow](stripe-refund-with-approval.md) for a demo without Jev.
 
-Native identity setup below requires an unreleased build with **Allowly Identity**.
-Published **0.3.0** supports the unbound and Auth0 paths.
-Its selector is named **External Identity Provider**; the native build calls it
-**Identity**.
+Version **0.4.0** supports native **Allowly Identity**, Auth0, and unbound
+authorizations through the **Identity** selector.
 
 ## Free mock mode
 
@@ -120,8 +118,7 @@ credential's **Test** button only tests the API key.
 ## Import and run the free demo
 
 1. On a self-hosted n8n instance that permits Code nodes, install
-   `n8n-nodes-allowly` **0.3.0** for unbound or Auth0 authorizations, or use a build
-   with **Allowly Identity** for native identity. Import the JSON.
+   `n8n-nodes-allowly` **0.4.0**, then import the JSON.
 2. Create a succeeded USD PaymentIntent in Stripe test mode with enough received
    funds. No payment is created by this workflow.
 3. Select the same Stripe test credential on **Read Stripe payment** and

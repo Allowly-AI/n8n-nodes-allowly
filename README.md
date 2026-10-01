@@ -16,7 +16,7 @@ On self-hosted n8n, an Owner or Admin can install the package:
 3. Install the current release:
 
 ```text
-n8n-nodes-allowly@0.3.0
+n8n-nodes-allowly@0.4.0
 ```
 
 The verified integration page is at
@@ -40,7 +40,7 @@ retrieval.
 ## Example: Stripe refunds with review
 
 The [Stripe test-refund example](examples/stripe-refund-with-approval.md) targets
-`n8n-nodes-allowly` **0.3.0**. Import the workflow, configure credentials and a
+`n8n-nodes-allowly` **0.4.0**. Import the workflow, configure credentials and a
 stored authorization, then test allow, deny, confirmation, and escalation paths.
 It binds approval to the refund request, checks again after review, and preserves
 the Stripe result separately from the decision receipt.
@@ -62,11 +62,8 @@ decision receipt does and does not prove.
 
 ## Set up Allowly Identity for agent workflows
 
-**Allowly Identity is unreleased.** These instructions require a build from this
-source that includes the **Allowly Identity** option. Published **0.3.0** supports
-unbound and Auth0 authorizations; it does not include native identity support.
-Its identity selector is named **External Identity Provider**; this build calls
-it **Identity**.
+Version **0.4.0** supports native **Allowly Identity**, Auth0, and unbound
+authorizations through the **Identity** selector.
 
 For an enrolled Allowly agent, choose **Allowly Identity** in the **Allowly API**
 credential. Set it up once before running protected actions:
