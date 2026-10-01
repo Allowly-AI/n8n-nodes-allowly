@@ -23,6 +23,11 @@ refund request per execution. It targets **n8n-nodes-allowly 0.3.0** and Stripe
 test mode. Keep the original
 [refund workflow](stripe-refund-with-approval.md) for a demo without Jev.
 
+Native identity setup below requires an unreleased build with **Allowly Identity**.
+Published **0.3.0** supports the unbound and Auth0 paths.
+Its selector is named **External Identity Provider**; the native build calls it
+**Identity**.
+
 ## Free mock mode
 
 The imported workflow starts with `jevMode: "mock"`. This path makes no
@@ -97,21 +102,34 @@ escalate, then confirm. This gives the demo these boundaries:
   requires review.
 - A clear, low-value request can be allowed.
 
-Set an escalation target such as `finance-review`. Create one stored
-authorization for the policy and reuse its `authorizationId`; do not create a
-new authorization for every refund.
+Set an escalation target such as `finance-review`. For native identity,
+[enroll the policy's agent with the CLI](../README.md#set-up-allowly-identity-for-agent-workflows)
+before creating an authorization. Save the completed JSON in **Allowly API /
+Allowly Identity Credential**, select **Identity: Allowly Identity**, and keep
+the runtime API key in that credential. Keep both secrets out of workflow JSON,
+items, and logs.
+
+Create one stored authorization for the policy and reuse its `authorizationId`;
+do not create a new authorization for every refund. Existing authorizations stay
+unchanged after enrollment. For migration, create a new or replacement
+authorization after enrollment and update the stored workflow ID deliberately.
+Test **Check** with that bound authorization and valid refund context before a
+refund run. It validates native identity and writes a decision receipt. The
+credential's **Test** button only tests the API key.
 
 ## Import and run the free demo
 
-1. Install `n8n-nodes-allowly` **0.3.0** on a self-hosted n8n instance that
-   permits Code nodes, then import the JSON.
+1. On a self-hosted n8n instance that permits Code nodes, install
+   `n8n-nodes-allowly` **0.3.0** for unbound or Auth0 authorizations, or use a build
+   with **Allowly Identity** for native identity. Import the JSON.
 2. Create a succeeded USD PaymentIntent in Stripe test mode with enough received
    funds. No payment is created by this workflow.
 3. Select the same Stripe test credential on **Read Stripe payment** and
    **Create Stripe test refund**.
 4. Select the same Allowly API credential on both Check nodes, both Resolve
-   nodes, and **Fetch decision receipt**. Keep **External Identity Provider** set
-   to **No External Identity** unless the stored authorization requires Auth0.
+   nodes, and **Fetch decision receipt**. Set **Identity** to match the stored
+   authorization: **Allowly Identity** for native identity, **No External Identity**
+   for an unbound grant, or **Auth0 Machine-to-Machine** for an Auth0 binding.
 5. On **Wait for reviewer**, select a dedicated Header Auth credential. Keep its
    secret separate from the Stripe, Allowly, and OpenRouter keys.
 6. Edit **Refund request** with the stored authorization, Stripe test PaymentIntent,

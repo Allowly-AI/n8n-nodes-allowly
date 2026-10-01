@@ -265,16 +265,21 @@ test('workflow identity check acquires an Auth0 token once and keeps it out of o
 test('identity credentials use password fields for stored machine credentials', () => {
 	const credential = new AllowlyApi();
 	const provider = credential.properties.find((candidate) => candidate.name === 'identityMode');
-	assert.equal(provider.displayName, 'External Identity Provider');
+	assert.equal(provider.displayName, 'Identity');
 	assert.equal(provider.default, 'apiKeyOnly');
 	assert.deepEqual(provider.options.map(({ name, value }) => ({ name, value })), [
+		{ name: 'Allowly Identity', value: 'allowlyNative' },
 		{ name: 'No External Identity', value: 'apiKeyOnly' },
 		{ name: 'Auth0 Machine-to-Machine', value: 'auth0M2M' },
 	]);
-	for (const name of ['apiKey', 'auth0ClientId', 'auth0ClientSecret']) {
+	for (const name of ['apiKey', 'nativeAgentCredential', 'auth0ClientId', 'auth0ClientSecret']) {
 		const property = credential.properties.find((candidate) => candidate.name === name);
 		assert.equal(property.typeOptions.password, true, name);
 	}
+	const nativeCredential = credential.properties.find((candidate) => candidate.name === 'nativeAgentCredential');
+	assert.equal(nativeCredential.displayName, 'Allowly Identity Credential');
+	assert.equal(nativeCredential.required, true);
+	assert.deepEqual(nativeCredential.displayOptions, { show: { identityMode: ['allowlyNative'] } });
 });
 
 test('identity request failures redact runtime, Auth0, and identity tokens from errors', async () => {

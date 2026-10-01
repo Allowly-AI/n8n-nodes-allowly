@@ -49,10 +49,15 @@ export class AllowlyApi implements ICredentialType {
 				'Optional stable secret for Mask Email Locally. Back it up; changing it changes derived user IDs.',
 		},
 		{
-			displayName: 'External Identity Provider',
+			displayName: 'Identity',
 			name: 'identityMode',
 			type: 'options',
 			options: [
+				{
+					name: 'Allowly Identity',
+					value: 'allowlyNative',
+					description: 'Sign short-lived agent tokens locally using the enrolled CLI credential',
+				},
 				{
 					name: 'No External Identity',
 					value: 'apiKeyOnly',
@@ -65,6 +70,17 @@ export class AllowlyApi implements ICredentialType {
 				},
 			],
 			default: 'apiKeyOnly',
+		},
+		{
+			displayName: 'Allowly Identity Credential',
+			name: 'nativeAgentCredential',
+			type: 'string',
+			typeOptions: { password: true },
+			default: '',
+			required: true,
+			description:
+				'Paste the completed JSON file from allowly agent enroll. The private key stays in n8n credential storage.',
+			displayOptions: { show: { identityMode: ['allowlyNative'] } },
 		},
 		{
 			displayName: 'Auth0 Issuer',

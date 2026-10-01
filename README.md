@@ -60,6 +60,66 @@ The workflow uses the verified `n8n-nodes-allowly.allowly` type at node version
 authorization placeholders, the deterministic denied test, and what a signed
 decision receipt does and does not prove.
 
+## Set up Allowly Identity for agent workflows
+
+**Allowly Identity is unreleased.** These instructions require a build from this
+source that includes the **Allowly Identity** option. Published **0.3.0** supports
+unbound and Auth0 authorizations; it does not include native identity support.
+Its identity selector is named **External Identity Provider**; this build calls
+it **Identity**.
+
+For an enrolled Allowly agent, choose **Allowly Identity** in the **Allowly API**
+credential. Set it up once before running protected actions:
+
+1. Create the agent and its policy in Allowly. Keep the exact agent ID.
+2. Install the [Allowly CLI](https://github.com/Allowly-AI/allowly-cli#enroll-an-agent),
+   sign in, and enroll that agent:
+
+   ```bash
+   npm install -g @allowly-ai/cli
+   allowly login
+   allowly agent enroll <agent-id> --out /secure/path/credential.json
+   ```
+
+3. In n8n, create an **Allowly API** credential. Enter the workspace's runtime
+   **API Key**, set **Identity** to **Allowly Identity**, and paste the complete
+   JSON from the completed file into **Allowly Identity Credential**. Paste the
+   JSON itself, not a file path or an identity token.
+4. After enrollment succeeds, use **Create Authorization** once for that agent's
+   policy. Store the returned `authorizationId` for your workflow.
+5. Run **Check** with that stored authorization and a policy action. This checks
+   the native identity and writes a decision receipt. Confirm the expected
+   decision before connecting a provider action.
+
+Enrollment registers only the public key with Allowly. The private credential
+stays in the owner-only CLI file, then in n8n's encrypted credential store. Use
+the completed version-1 file with `provider: "allowly"`, `workspace_id`,
+`agent_id`, `binding_id`, `key_id`, and `private_key_jwk`. Keep all API keys,
+private credentials, and identity tokens out of workflow JSON, items, and logs.
+
+The node signs a 60-second identity token locally using Ed25519 and sends it for
+**Check**, **Check & Enforce**, and **Acknowledge Receipt**. The CLI is not needed
+when the workflow runs. The runtime API key is still required. Enrollment uses
+the CLI setup login; a runtime API key cannot enroll an agent.
+
+The credential's **Test** button only lists one authorization to test the API
+key. It does not test the private credential or its authorization binding. Use
+the **Check** test above to validate native identity.
+
+Existing authorizations keep the identity recorded when they were created.
+Enrollment does not bind an old authorization. When migrating, create a new or
+replacement authorization after enrollment, then deliberately update the
+workflow's stored ID and test it. A native identity credential cannot be used
+with an unbound authorization. Keep **No External Identity** for existing
+unbound authorizations, or **Auth0 Machine-to-Machine** for an Auth0 binding.
+The credential default remains **No External Identity** for compatibility.
+
+Enrollment must be enabled on the target runtime, and its agent/key limits
+apply. If enrollment is interrupted or returns
+`native_agent_enrollment_disabled`, keep the pending file. Once enrollment can
+complete, rerun the command with `--resume` and the same `--out` path before
+creating the authorization.
+
 ## Operations
 
 ### Seal JSON with Managed Webhook
@@ -118,6 +178,10 @@ Authorization: Bearer allowly_l1_s001_...
 ```
 
 The node output includes `authorizationId`. Store it in your workflow or app data, then use it with the **Check** operation. The selected policy must define `default_expiry_days`; this node does not invent an authorization expiry.
+
+For **Allowly Identity**, enroll the agent before creating this authorization.
+Creating it records the agent identity that must sign its checks. Enrollment
+never changes an existing grant.
 
 Copy the policy ID from the Allowly dashboard into **Policy ID**.
 
@@ -200,7 +264,8 @@ Report an approved or rejected escalation using its `escalation_id`. **Resolved 
 - **Allowly SEAL Webhook API / Private Webhook URL**: the complete private URL copied from the dashboard. This is the only credential needed for managed sealing and retrieval. Treat it like a password.
 - **Allowly API / API Key**: Allowly runtime key used by the older direct SEAL operations and authorization operations.
 - **Allowly API / User ID Pepper**: optional encrypted value used only by **Mask Email Locally**. Back it up; changing it changes derived user IDs.
-- **Allowly API / External Identity Provider**: choose **Auth0 Machine-to-Machine** only for identity-bound authorizations. Keep **No External Identity** for authorizations without external identity.
+- **Allowly API / Identity**: choose **Allowly Identity** for an authorization bound to native identity, **Auth0 Machine-to-Machine** for an Auth0 binding, or **No External Identity** for an unbound authorization. The existing default remains **No External Identity**.
+- **Allowly Identity Credential**: required when **Identity** is **Allowly Identity**. Paste the complete, successfully enrolled CLI credential JSON. Its private key stays in n8n credential storage; the node returns neither the credential nor its signed tokens in items or errors.
 - **Auth0 Issuer**, **Auth0 Audience**, **Auth0 Client ID**, and **Auth0 Client Secret**: customer Auth0 machine credential stored by n8n. The node validates the exact HTTPS issuer, obtains a short-lived token without following redirects, and reuses it only while unexpired during the current node execution. Secrets and tokens are not returned in items or errors.
 
 Production webhook credentials must use the hosted Allowly API at `https://api.allowly.ai`. For local development only, enable **Allow Local Development URL** on the credential to accept a private URL on `localhost`, `127.0.0.1`, or `::1`. When n8n SSRF protection is enabled, keep `N8N_SSRF_PROTECTION_ENABLED=true` and add only the loopback hostname in use, such as `N8N_SSRF_ALLOWED_HOSTNAMES=localhost`. These advanced settings are not part of customer credential setup.

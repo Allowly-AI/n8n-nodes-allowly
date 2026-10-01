@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { generateKeyPairSync, verify } = require('node:crypto');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 const vm = require('node:vm');
@@ -41,6 +42,7 @@ async function run(options = {}) {
 		requests.push(clone(call));
 		if (call.url.endsWith('/v1/check')) {
 			if (options.checkError) throw new Error('Allowly unavailable');
+			if (options.checkIdentity) options.checkIdentity(call);
 			const decision = (options.decisions ?? ['allow'])[checks++] ?? 'allow';
 			const result = {
 				decision, reason: 'test_reason', receipt: { status: 'pending', receipt_id: 'rcp_test' + checks },
@@ -72,7 +74,7 @@ async function run(options = {}) {
 			} else if (node.type === 'n8n-nodes-allowly.allowly') {
 				const params = Object.fromEntries(Object.entries(node.parameters).map(([key, val]) => [key, value(val)]));
 				const context = {
-					getInputData: () => [{ json: item }], getCredentials: async () => ({}),
+					getInputData: () => [{ json: item }], getCredentials: async () => options.credentials ?? {},
 					getNodeParameter: (name) => params[name], getExecutionId: () => executionId,
 					getNode: () => node, continueOnFail: () => false,
 					helpers: { httpRequestWithAuthentication: allowlyRequest },
@@ -156,6 +158,72 @@ test('allow sends exactly the checked refund fields and preserves pending receip
 	assert.equal(evidence.receiptPending, true);
 	assert.equal(evidence.receiptVerification, 'not_performed');
 	assert.equal(evidence.stripeRefund.status, 'succeeded');
+});
+
+function boundNativeIdentity() {
+	const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+	const credential = {
+		version: 1, provider: 'allowly', workspace_id: 'ws_refund_bound', agent_id: 'agent_refund_bound',
+		binding_id: 'aib_refund_bound', key_id: 'ack_refund_bound',
+		private_key_jwk: privateKey.export({ format: 'jwk' }),
+	};
+	return {
+		credential,
+		credentials: { identityMode: 'allowlyNative', nativeAgentCredential: JSON.stringify(credential) },
+		checkIdentity: (call) => {
+			const token = call.headers['X-Allowly-Agent-Token'];
+			if (typeof token !== 'string') throw new Error('Bound authorization requires an identity token');
+			const [header, payload, signature, extra] = token.split('.');
+			assert.equal(extra, undefined);
+			assert.equal(verify(null, Buffer.from(`${header}.${payload}`), publicKey,
+				Buffer.from(signature, 'base64url')), true, 'bound identity signature');
+			assert.deepEqual(JSON.parse(Buffer.from(header, 'base64url')), {
+				alg: 'EdDSA', typ: 'JWT', kid: credential.key_id,
+			});
+			const claims = JSON.parse(Buffer.from(payload, 'base64url'));
+			const now = Math.floor(Date.now() / 1000);
+			if (claims.iss !== 'allowly-agent' || claims.aud !== credential.workspace_id
+				|| claims.sub !== credential.agent_id || claims.bid !== credential.binding_id
+				|| claims.nbf > now || claims.exp <= now || claims.exp - claims.iat !== 60) {
+				throw new Error('Native identity does not match the bound authorization');
+			}
+		},
+	};
+}
+
+test('a bound refund authorization rejects an API-key-only check before Stripe', async () => {
+	const identity = boundNativeIdentity();
+	const result = await run({ checkIdentity: identity.checkIdentity });
+	assert.match(result.error?.message ?? '', /requires an identity token/);
+	assert.equal(checkCalls(result).length, 1);
+	assert.equal(refundCalls(result).length, 0);
+});
+
+test('a valid native identity passes the bound refund check and review recheck before Stripe', async () => {
+	const identity = boundNativeIdentity();
+	const result = await run({ credentials: identity.credentials, checkIdentity: identity.checkIdentity,
+		decisions: ['confirm', 'allow'] });
+	assert.equal(result.error, null);
+	assert.equal(checkCalls(result).length, 2);
+	assert.equal(refundCalls(result).length, 1);
+	assert.deepEqual(checkCalls(result)[1].body, checkCalls(result)[0].body);
+	const resolution = result.requests.find((call) => call.url.includes('/v1/confirmations/'));
+	assert.equal(resolution.headers['X-Allowly-Agent-Token'], undefined);
+	assert.equal(JSON.stringify(result.outputs).includes(identity.credential.private_key_jwk.d), false);
+	for (const check of checkCalls(result)) {
+		assert.equal(check.disableFollowRedirect, true);
+		assert.equal(JSON.stringify(result.outputs).includes(check.headers['X-Allowly-Agent-Token']), false);
+	}
+});
+
+test('a signed native identity for another binding never reaches the refund endpoint', async () => {
+	const identity = boundNativeIdentity();
+	const credentials = { ...identity.credentials,
+		nativeAgentCredential: JSON.stringify({ ...identity.credential, binding_id: 'aib_other' }) };
+	const result = await run({ credentials, checkIdentity: identity.checkIdentity });
+	assert.match(result.error?.message ?? '', /does not match the bound authorization/);
+	assert.equal(checkCalls(result).length, 1);
+	assert.equal(refundCalls(result).length, 0);
 });
 
 for (const decision of ['confirm', 'escalate']) {

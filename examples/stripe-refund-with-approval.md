@@ -5,6 +5,11 @@ It targets **n8n-nodes-allowly 0.3.0** and uses n8n's standard HTTP, Code, IF,
 and Wait nodes. The workflow is inactive and contains no credentials or pinned data.
 Use a self-hosted n8n instance that permits this community node and Code nodes.
 
+Native identity setup below requires an unreleased build with **Allowly Identity**.
+Published **0.3.0** supports the unbound and Auth0 paths.
+Its selector is named **External Identity Provider**; the native build calls it
+**Identity**.
+
 A refund request is checked against a stored Allowly authorization. Only `allow`
 reaches Stripe. `deny` stops; `confirm` and `escalate` wait for an authenticated
 review and then require a fresh `allow`. Errors stop the workflow.
@@ -32,11 +37,23 @@ The API condition forms are `{ "field": "amount_minor", "gt": 100000 }`,
 Set the policy's `escalation_targets["refund.create"]` to an opaque value such as
 `finance-review`. Leave unconditional confirmation/escalation/denial lists empty.
 
+For native identity, [enroll this agent with the CLI](../README.md#set-up-allowly-identity-for-agent-workflows)
+before creating the authorization. Use the exact agent ID from the policy, then
+save the completed credential JSON in **Allowly API / Allowly Identity Credential**
+and select **Identity: Allowly Identity**. Keep the runtime API key in the same
+n8n credential. Do not put either secret in the workflow JSON or output.
+
 Using the **Create Authorization** operation in a separate setup workflow, create
 one authorization for the policy and an opaque test user ID. Store its returned
 `authorizationId`; the refund workflow reuses it. Do not create a new authorization
 for every refund. Setup credentials configure policies; runtime API keys perform
 checks. Follow the policy publication instructions when replacing a policy.
+
+Enrollment leaves existing authorizations unchanged. To migrate an unbound
+authorization, create a new or replacement authorization after enrollment, then
+update the stored workflow ID. Before running a refund, test **Check** with the
+bound authorization and valid refund context. This validates native identity and
+writes a decision receipt. The credential's **Test** button only tests the API key.
 
 See [setup](https://allowly.ai/docs/api-reference/setup-and-tombstones/),
 [authorizations](https://allowly.ai/docs/api-reference/authorizations/), and
@@ -44,7 +61,8 @@ See [setup](https://allowly.ai/docs/api-reference/setup-and-tombstones/),
 
 ## 2. Prepare Stripe and import
 
-1. Install `n8n-nodes-allowly` **0.3.0** in n8n, then import the JSON file.
+1. Install `n8n-nodes-allowly` **0.3.0** for unbound or Auth0 authorizations, or
+   use a build with **Allowly Identity** for native identity. Import the JSON file.
 2. Create a succeeded USD PaymentIntent in Stripe's test mode or sandbox, with
    enough received funds for the scenario. Keep its `pi_...` ID. No payment is
    created by this workflow.
@@ -52,8 +70,9 @@ See [setup](https://allowly.ai/docs/api-reference/setup-and-tombstones/),
    and **Create Stripe test refund**. The workflow rejects a retrieved payment
    unless `livemode` is exactly `false` and the payment ID matches.
 4. Select the **same Allowly API credential** on both Check nodes, both Resolve
-   nodes, and **Fetch decision receipt**. Keep **External Identity Provider** set
-   to **No External Identity** unless the stored authorization requires Auth0.
+   nodes, and **Fetch decision receipt**. Set **Identity** to match the stored
+   authorization: **Allowly Identity** for native identity, **No External Identity**
+   for an unbound grant, or **Auth0 Machine-to-Machine** for an Auth0 binding.
 5. On **Wait for reviewer**, keep Header Auth and select a dedicated **Header Auth**
    credential. Use a header such as `X-Refund-Review-Token` and a private random
    value. Do not use an Allowly or Stripe API key as the review secret. The shared
