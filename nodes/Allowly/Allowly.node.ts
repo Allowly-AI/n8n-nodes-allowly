@@ -445,7 +445,15 @@ async function identityTokenForCredentials(
 	cache: IdentityTokenCache | undefined,
 ): Promise<{ token?: string; cache?: IdentityTokenCache }> {
 	if (credentials.identityMode === 'allowlyNative') {
-		return { token: nativeAgentToken(credentials.nativeAgentCredential) };
+		const token = nativeAgentToken(credentials.nativeAgentCredential);
+		if (token === null) {
+			throw new NodeOperationError(
+				executeFunctions.getNode(),
+				'Allowly Identity Credential must contain the completed JSON file from allowly agent enroll.',
+				{ itemIndex },
+			);
+		}
+		return { token };
 	}
 	if (credentials.identityMode === undefined || credentials.identityMode === 'apiKeyOnly') return {};
 	if (credentials.identityMode !== 'auth0M2M') {

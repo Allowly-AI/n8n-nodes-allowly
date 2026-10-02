@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { generateKeyPairSync, verify } = require('node:crypto');
+const { NodeOperationError } = require('n8n-workflow');
 const { Allowly } = require('../dist/nodes/Allowly/Allowly.node.js');
 const { nativeAgentToken } = require('../dist/nodes/Allowly/native-identity.js');
 const { hashSealValue } = require('../dist/nodes/Allowly/seal-verifier.js');
@@ -158,16 +159,8 @@ function invalidCredentials() {
 }
 
 for (const [name, value] of invalidCredentials()) {
-	test(`native identity rejects ${name} with a safe credential error`, () => {
-		assert.throws(() => nativeAgentToken(value, 1234567890), (error) => {
-			assert.equal(error instanceof Error, true);
-			assert.equal(error.message,
-				'Allowly Identity Credential must contain the completed JSON file from allowly agent enroll.');
-			assert.equal(error.message.includes('malformed-private-secret'), false);
-			assert.equal(error.message.includes('private-secret'), false);
-			if (typeof value === 'string' && value.length > 10) assert.equal(error.message.includes(value), false);
-			return true;
-		});
+	test(`native identity returns null for ${name}`, () => {
+		assert.equal(nativeAgentToken(value, 1234567890), null);
 	});
 }
 
@@ -250,7 +243,14 @@ const invalidBeforeHttp = new Set(['missing credential', 'invalid JSON', 'pendin
 for (const [name, credential] of invalidCredentials().filter(([name]) => invalidBeforeHttp.has(name))) {
 	test(`Check rejects ${name} before any HTTP request`, async () => {
 		const context = nativeContext({ credentials: { nativeAgentCredential: credential } });
-		await assert.rejects(() => new Allowly().execute.call(context), /Allowly Identity Credential/);
+		await assert.rejects(() => new Allowly().execute.call(context), (error) => {
+			assert.ok(error instanceof NodeOperationError);
+			assert.equal(error.node.name, 'Allowly native test');
+			assert.equal(error.context.itemIndex, 0);
+			assert.equal(error.message,
+				'Allowly Identity Credential must contain the completed JSON file from allowly agent enroll.');
+			return true;
+		});
 		assert.equal(context.requests.length, 0);
 		assert.equal(context.tokenRequests.length, 0);
 	});
