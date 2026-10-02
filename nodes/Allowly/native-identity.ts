@@ -1,8 +1,5 @@
 import { createPrivateKey, createPublicKey, sign } from 'crypto';
 
-const INVALID_CREDENTIAL =
-	'Allowly Identity Credential must contain the completed JSON file from allowly agent enroll.';
-
 function object(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -32,30 +29,30 @@ export function nativeCredentialSecrets(value: unknown): string[] {
 export function nativeAgentToken(
 	value: unknown,
 	now = Math.floor(Date.now() / 1_000),
-): string {
+): string | null {
 	try {
-		if (typeof value !== 'string' || !value.trim()) throw new Error();
+		if (typeof value !== 'string' || !value.trim()) return null;
 		const credential: unknown = JSON.parse(value);
 		if (!object(credential) || credential.version !== 1 || credential.provider !== 'allowly') {
-			throw new Error();
+			return null;
 		}
 		for (const field of ['workspace_id', 'agent_id', 'binding_id', 'key_id']) {
 			const id = credential[field];
 			if (typeof id !== 'string' || !id || id !== id.trim() || id.length > 128 || /[\r\n]/.test(id)) {
-				throw new Error();
+				return null;
 			}
 		}
 		if (!/^[A-Za-z0-9_-]+$/.test(credential.binding_id as string)
-			|| !/^[A-Za-z0-9_-]+$/.test(credential.key_id as string)) throw new Error();
+			|| !/^[A-Za-z0-9_-]+$/.test(credential.key_id as string)) return null;
 		const jwk = credential.private_key_jwk;
 		if (!object(jwk) || jwk.kty !== 'OKP' || jwk.crv !== 'Ed25519'
-			|| !keyBytes(jwk.x) || !keyBytes(jwk.d)) throw new Error();
-		if (!Number.isSafeInteger(now) || now < 0) throw new Error();
+			|| !keyBytes(jwk.x) || !keyBytes(jwk.d)) return null;
+		if (!Number.isSafeInteger(now) || now < 0) return null;
 		const privateKey = createPrivateKey({
 			key: { kty: 'OKP', crv: 'Ed25519', x: jwk.x, d: jwk.d },
 			format: 'jwk',
 		});
-		if (createPublicKey(privateKey).export({ format: 'jwk' }).x !== jwk.x) throw new Error();
+		if (createPublicKey(privateKey).export({ format: 'jwk' }).x !== jwk.x) return null;
 		const header = Buffer.from(JSON.stringify({ alg: 'EdDSA', typ: 'JWT', kid: credential.key_id }))
 			.toString('base64url');
 		const payload = Buffer.from(JSON.stringify({
@@ -70,8 +67,6 @@ export function nativeAgentToken(
 		const input = `${header}.${payload}`;
 		return `${input}.${sign(null, Buffer.from(input, 'ascii'), privateKey).toString('base64url')}`;
 	} catch {
-		// This pure signer has no node context; execute() wraps the safe error.
-		// eslint-disable-next-line @n8n/community-nodes/require-node-api-error
-		throw new Error(INVALID_CREDENTIAL);
+		return null;
 	}
 }
