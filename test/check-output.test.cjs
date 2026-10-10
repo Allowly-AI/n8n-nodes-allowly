@@ -5,6 +5,15 @@ const { readFileSync } = require('node:fs');
 const { createServer } = require('node:http');
 const { join } = require('node:path');
 const axios = require('axios');
+const { decodeReceipt } = require('../nodes/Allowly/seal-verifier.js');
+
+function changedReceipt(receipt, fields) {
+	return { ...receipt, payload: Buffer.from(JSON.stringify({ ...decodeReceipt(receipt), ...fields })).toString('base64url') };
+}
+
+function receiptFixture(fields) {
+	return changedReceipt(packagedSealVector('verification-v1.json').should_verify[0].receipt, fields);
+}
 const { AllowlyApi } = require('../dist/credentials/AllowlyApi.credentials.js');
 const { AllowlySealWebhookApi } = require('../dist/credentials/AllowlySealWebhookApi.credentials.js');
 const {
@@ -33,7 +42,7 @@ async function sealFixture() {
 	const verification = packagedSealVector('verification-v1.json');
 	const vector = verification.should_verify[0];
 	return {
-		digest: vector.receipt.context.record_sha256,
+		digest: decodeReceipt(vector.receipt).context.record_sha256,
 		keysDocument: verification.public_keys,
 		receipt: vector.receipt,
 		record: JSON.parse(vector.raw_json),
@@ -409,7 +418,7 @@ test('unknown operations never dispatch or continue on failure', async () => {
 });
 
 test('Acknowledge Receipt binds the exact hash, timestamp, and retry key', async () => {
-	const receipt = { receipt_id: 'rcp_123', issued_at: '2026-09-24T20:02:00Z', signature: 'signed' };
+	const receipt = receiptFixture({ receipt_id: 'rcp_123', issued_at: '2026-09-24T20:02:00.000Z' });
 	const hash = require('../dist/nodes/Allowly/seal-verifier.js').hashSealValue(receipt);
 	const context = receiptOperationContext({
 		operation: 'acknowledgeReceipt',
@@ -529,7 +538,7 @@ test('Seal hashes locally, polls until signed, and returns portable evidence', a
 					record_sha256: fixture.digest,
 					decision: 'allow',
 					reason: 'authorization_granted_action_active',
-					receipt: { status: 'pending', receipt_id: fixture.receipt.receipt_id },
+					receipt: { status: 'pending', receipt_id: decodeReceipt(fixture.receipt).receipt_id },
 				};
 			}
 			if (options.url.includes('/v1/receipts/')) {
@@ -602,7 +611,7 @@ test('Seal rejects a response without an authenticated workspace ID', async () =
 			record_sha256: fixture.digest,
 			decision: 'allow',
 			reason: 'authorization_granted_action_active',
-			receipt: { status: 'pending', receipt_id: fixture.receipt.receipt_id },
+			receipt: { status: 'pending', receipt_id: decodeReceipt(fixture.receipt).receipt_id },
 		}),
 	);
 
@@ -639,7 +648,7 @@ test('receipt polling ignores response URLs and uses the fixed Allowly origin', 
 	const context = sealContext('verifySeal', {}, (options) => {
 		calls += 1;
 		assert.equal(options.url, 'https://api.allowly.ai/v1/receipts/rcp%2Ftrusted');
-		return { status: 'signed', receipt: { receipt_id: 'rcp/trusted' } };
+		return { status: 'signed', receipt: receiptFixture({ receipt_id: 'rcp/trusted' }) };
 	});
 
 	const receipt = await waitForSignedSeal(
@@ -653,13 +662,13 @@ test('receipt polling ignores response URLs and uses the fixed Allowly origin', 
 		0,
 	);
 	assert.equal(calls, 1);
-	assert.equal(receipt.receipt_id, 'rcp/trusted');
+	assert.equal(decodeReceipt(receipt).receipt_id, 'rcp/trusted');
 });
 
 test('receipt polling rejects a changed receipt ID', async () => {
 	const context = sealContext('verifySeal', {}, () => ({
 		status: 'signed',
-		receipt: { receipt_id: 'rcp_other' },
+		receipt: receiptFixture({ receipt_id: 'rcp_other' }),
 	}));
 
 	await assert.rejects(
@@ -683,7 +692,7 @@ function fullHttpResponse(statusCode, body, headers = {}) {
 function webhookDelivery(fixture, overrides = {}) {
 	const attemptId = overrides.attempt_id ?? 'swd_test_attempt';
 	const receiptId = overrides.receipt_id === undefined
-		? fixture.receipt.receipt_id
+		? decodeReceipt(fixture.receipt).receipt_id
 		: overrides.receipt_id;
 	const response = {
 		attempt_id: attemptId,
@@ -705,7 +714,7 @@ function webhookDelivery(fixture, overrides = {}) {
 		...overrides,
 	};
 	if (!Object.hasOwn(overrides, 'metadata')) {
-		response.metadata = response.receipt?.context?.seal_metadata ?? null;
+		response.metadata = response.receipt ? decodeReceipt(response.receipt).context.seal_metadata ?? null : null;
 	}
 	return response;
 }
@@ -919,7 +928,7 @@ test('managed webhook sends exact raw JSON bytes and returns verified evidence w
 	assert.equal(output[0][0].json.signatureVerified, true);
 	assert.equal(output[0][0].json.recordMatches, true);
 	assert.equal(output[0][0].json.recordJson, rawJson);
-	assert.deepEqual(output[0][0].json.metadata, fixture.receipt.context.seal_metadata);
+	assert.deepEqual(output[0][0].json.metadata, decodeReceipt(fixture.receipt).context.seal_metadata);
 	assert.equal(Object.hasOwn(output[0][0].json.keysDocument, 'keys_url'), false);
 	assert.equal(JSON.stringify(output).includes(WEBHOOK_TOKEN), false);
 	assert.equal(JSON.stringify(output).includes('status_url'), false);
@@ -1414,7 +1423,7 @@ test("fresh local SEAL verifier rejects a validly signed wire4 receipt", async (
   const crypto = require("node:crypto");
   const { canonicalize } = await import(require("node:url").pathToFileURL(require("node:path").resolve(__dirname, "../../allowly-receipt-format/verifiers/typescript/dist/verifier.js")));
   const privateKey = crypto.createPrivateKey({ key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), Buffer.alloc(32)]), format: "der", type: "pkcs8" });
-  const payload = { ...vector.receipt, schema_version: "4" };
+  const payload = { ...verifier.decodeReceipt(vector.receipt), schema_version: "4", alg: "Ed25519", key_id: "test-key/v1" };
   delete payload.signature;
   const signature = crypto.sign(null, canonicalize(payload), privateKey);
   assert.equal(crypto.verify(null, canonicalize(payload), crypto.createPublicKey(privateKey), signature), true);

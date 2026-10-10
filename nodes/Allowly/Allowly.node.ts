@@ -427,10 +427,11 @@ export async function waitForSignedSeal(
 			{ itemIndex },
 		);
 	}
+	const claims = sealVerifier.decodeReceipt(receipt);
 	if (
-		typeof receipt.receipt_id !== 'string' ||
-		!receipt.receipt_id ||
-		(expectedReceiptId !== null && receipt.receipt_id !== expectedReceiptId)
+		typeof claims.receipt_id !== 'string' ||
+		!claims.receipt_id ||
+		(expectedReceiptId !== null && claims.receipt_id !== expectedReceiptId)
 	) {
 		throw new NodeOperationError(
 			executeFunctions.getNode(),
@@ -1185,9 +1186,10 @@ function parseSealWebhookDelivery(
 			{ itemIndex },
 		);
 	}
+	const claims = receipt === null ? null : sealVerifier.decodeReceipt(receipt);
 	if (
-		receipt !== null &&
-		(receiptId === null || receipt.receipt_id !== receiptId || receipt.workspace_id !== workspaceId)
+		claims !== null &&
+		(receiptId === null || claims.receipt_id !== receiptId || claims.workspace_id !== workspaceId)
 	) {
 		throw new NodeOperationError(
 			executeFunctions.getNode(),
@@ -1196,7 +1198,7 @@ function parseSealWebhookDelivery(
 		);
 	}
 	if (receipt !== null) {
-		const context = isRecord(receipt.context) ? receipt.context : {};
+		const context = isRecord(claims?.context) ? claims.context : {};
 		const signedMetadata = sealWebhookMetadata(
 			context.seal_metadata,
 			executeFunctions,
@@ -1435,7 +1437,7 @@ async function sealWebhookEvidence(
 			{ itemIndex },
 		);
 	}
-	if (typeof receipt.issued_at !== 'string' || !receipt.issued_at) {
+	if (typeof sealVerifier.decodeReceipt(receipt).issued_at !== 'string' || !sealVerifier.decodeReceipt(receipt).issued_at) {
 		throw new NodeOperationError(
 			executeFunctions.getNode(),
 			'Allowly returned a signed receipt without its recorded time.',
@@ -1448,7 +1450,7 @@ async function sealWebhookEvidence(
 		pending: false,
 		signatureVerified: true,
 		recordMatches: true,
-		recordedAt: receipt.issued_at,
+		recordedAt: sealVerifier.decodeReceipt(receipt).issued_at,
 		receipt,
 		keysDocument: trustedKeys.document,
 		trustedKeyFingerprints: trustedKeys.fingerprints,
@@ -2269,7 +2271,7 @@ export class Allowly implements INodeType {
 							recordMatches: true,
 							failureReason: null,
 							expectedWorkspaceId,
-							recordedAt: receipt.issued_at,
+							recordedAt: sealVerifier.decodeReceipt(receipt).issued_at,
 							receipt,
 							keysDocument: trustedKeys.document,
 							trustedKeyFingerprints: trustedKeys.fingerprints,
@@ -2368,7 +2370,8 @@ export class Allowly implements INodeType {
 					const receipt = receiptInput.status === 'signed' && isRecord(receiptInput.receipt)
 						? receiptInput.receipt
 						: receiptInput;
-					const receiptId = typeof receipt.receipt_id === 'string' ? receipt.receipt_id.trim() : '';
+					const claims = sealVerifier.decodeReceipt(receipt);
+					const receiptId = typeof claims.receipt_id === 'string' ? claims.receipt_id.trim() : '';
 					let receiptSha256: string;
 					try {
 						receiptSha256 = sealVerifier.hashSealValue(receipt);
@@ -2485,7 +2488,7 @@ export class Allowly implements INodeType {
 							profile: SEAL_PROFILE,
 							recordSha256: digest,
 							workspaceId,
-							recordedAt: receipt.issued_at,
+							recordedAt: sealVerifier.decodeReceipt(receipt).issued_at,
 							receipt,
 							keysDocument: trustedKeys.document,
 							trustedKeyFingerprints: trustedKeys.fingerprints,
@@ -2535,7 +2538,7 @@ export class Allowly implements INodeType {
 							recordMatches: verification.recordMatches,
 							failureReason: verification.failureReason,
 							expectedWorkspaceId,
-							recordedAt: receipt.issued_at,
+							recordedAt: sealVerifier.decodeReceipt(receipt).issued_at,
 							receipt,
 							keysDocument: trustedKeys.document,
 							trustedKeyFingerprints: trustedKeys.fingerprints,

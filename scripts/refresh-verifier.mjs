@@ -12,7 +12,7 @@ if (pkg.name !== "@allowly/verifier" || pkg.version !== "5.0.0") throw new Error
 const bundlePath = "nodes/Allowly/seal-verifier.js";
 await build({
   stdin: {
-    contents: 'export { SEAL_MAX_DEPTH, SEAL_MAX_UTF8_BYTES, SEAL_PROFILE, SealInputError, hashSealJson, hashSealValue, loadKeysFromJson, publicKeyFingerprint, verifySealJson, verifySealValue } from "./dist/verifier.js";',
+    contents: 'export { SEAL_MAX_DEPTH, SEAL_MAX_UTF8_BYTES, SEAL_PROFILE, SealInputError, hashSealJson, hashSealValue, loadKeysFromJson, publicKeyFingerprint, decodeReceipt, verifySealJson, verifySealValue } from "./dist/verifier.js";',
     resolveDir: source,
     sourcefile: "seal-verifier-entry.js",
     loader: "js",
