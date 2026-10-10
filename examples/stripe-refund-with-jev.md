@@ -19,11 +19,11 @@ values and records the resulting action decision. Only an Allowly `allow` can
 reach Stripe.
 
 The workflow is inactive, has no credentials or pinned data, and supports one
-refund request per execution. It targets **n8n-nodes-allowly 0.4.0** and Stripe
+refund request per execution. It targets **n8n-nodes-allowly 0.5.0** and Stripe
 test mode. Keep the original
 [refund workflow](stripe-refund-with-approval.md) for a demo without Jev.
 
-Version **0.4.0** supports native **Allowly Identity**, Auth0, and unbound
+Version **0.5.0** supports native **Allowly Identity**, Auth0, and unbound
 authorizations through the **Identity** selector.
 
 ## Free mock mode
@@ -42,72 +42,166 @@ fixture as a live TypeSafe result. Change the message only after switching to
 
 ## Prepare Allowly once
 
-Create or update the `refund.create` action with these context fields:
+Create the catalog action `refund.create`, then publish this complete flat policy definition. The first matching rule wins. Each alternative below is a separate ordered rule; conditions within one rule are all required.
 
 ```json
 {
-  "context_fields": {
-    "refund_request_id": "string",
-    "customer_message_id": "string",
-    "payment_intent_id": "string",
-    "amount_minor": "integer",
-    "currency": "string",
-    "reason": "string",
-    "triage_source": "string",
-    "jev_generation_id": "string",
-    "jev_model": "string",
-    "jev_provider": "string",
-    "refund_requested_ppm": "integer",
-    "refund_reason": "string",
-    "refund_reason_probability_ppm": "integer",
-    "refund_reason_confidence_ppm": "integer",
-    "triage_route": "string"
-  }
-}
-```
-
-The probabilities are integer parts per million, from 0 to 1,000,000. This
-avoids floating-point values in the receipt context.
-
-For the demo policy, use these constraints on `refund.create`:
-
-```json
-{
-  "deny_when": [
-    { "field": "amount_minor", "gt": 100000 },
-    { "field": "refund_requested_ppm", "lt": 100001 }
-  ],
-  "escalate_when": [
-    { "field": "amount_minor", "gt": 50000 }
-  ],
-  "confirm_when": [
-    { "field": "amount_minor", "gt": 5000 },
-    { "field": "refund_requested_ppm", "lt": 900000 },
-    { "field": "refund_reason_confidence_ppm", "lt": 800000 },
-    { "field": "refund_reason_probability_ppm", "lt": 600000 },
-    { "field": "refund_reason", "eq": "other_or_unclear" },
-    { "field": "refund_reason", "eq": "unauthorized" }
+  "profile": "allowly.policy.v1",
+  "policy_id": "refund-basic",
+  "agent_id": "refund-agent",
+  "default_expiry_days": 7,
+  "actions": [
+    {
+      "policy": {
+        "profile": "allowly.basic.v1",
+        "action": "refund.create",
+        "default_decision": "allow",
+        "default_target": null,
+        "fields": {
+          "refund_request_id": "string",
+          "customer_message_id": "string",
+          "payment_intent_id": "string",
+          "amount_minor": "integer",
+          "currency": "string",
+          "reason": "string",
+          "triage_source": "string",
+          "jev_generation_id": "string",
+          "jev_model": "string",
+          "jev_provider": "string",
+          "refund_requested_ppm": "integer",
+          "refund_reason": "string",
+          "refund_reason_probability_ppm": "integer",
+          "refund_reason_confidence_ppm": "integer",
+          "triage_route": "string"
+        },
+        "rules": [
+          {
+            "id": "deny-large",
+            "decision": "deny",
+            "target": null,
+            "conditions": [
+              {
+                "field": "amount_minor",
+                "op": "gt",
+                "value": 100000
+              }
+            ]
+          },
+          {
+            "id": "deny-not-requested",
+            "decision": "deny",
+            "target": null,
+            "conditions": [
+              {
+                "field": "refund_requested_ppm",
+                "op": "lt",
+                "value": 100001
+              }
+            ]
+          },
+          {
+            "id": "escalate-medium",
+            "decision": "escalate",
+            "target": "member:REPLACE_WITH_REAL_MEMBER_ID",
+            "conditions": [
+              {
+                "field": "amount_minor",
+                "op": "gt",
+                "value": 50000
+              }
+            ]
+          },
+          {
+            "id": "confirm-amount",
+            "decision": "confirm",
+            "target": "agent_owner",
+            "conditions": [
+              {
+                "field": "amount_minor",
+                "op": "gt",
+                "value": 5000
+              }
+            ]
+          },
+          {
+            "id": "confirm-request-confidence",
+            "decision": "confirm",
+            "target": "agent_owner",
+            "conditions": [
+              {
+                "field": "refund_requested_ppm",
+                "op": "lt",
+                "value": 900000
+              }
+            ]
+          },
+          {
+            "id": "confirm-reason-confidence",
+            "decision": "confirm",
+            "target": "agent_owner",
+            "conditions": [
+              {
+                "field": "refund_reason_confidence_ppm",
+                "op": "lt",
+                "value": 800000
+              }
+            ]
+          },
+          {
+            "id": "confirm-reason-probability",
+            "decision": "confirm",
+            "target": "agent_owner",
+            "conditions": [
+              {
+                "field": "refund_reason_probability_ppm",
+                "op": "lt",
+                "value": 600000
+              }
+            ]
+          },
+          {
+            "id": "confirm-unclear",
+            "decision": "confirm",
+            "target": "agent_owner",
+            "conditions": [
+              {
+                "field": "refund_reason",
+                "op": "eq",
+                "value": "other_or_unclear"
+              }
+            ]
+          },
+          {
+            "id": "confirm-unauthorized",
+            "decision": "confirm",
+            "target": "agent_owner",
+            "conditions": [
+              {
+                "field": "refund_reason",
+                "op": "eq",
+                "value": "unauthorized"
+              }
+            ]
+          }
+        ]
+      },
+      "guards": {},
+      "executable_operations": []
+    }
   ]
 }
 ```
 
-Conditions inside each list are alternatives. Allowly evaluates deny before
-escalate, then confirm. This gives the demo these boundaries:
+Use the actual agent ID and replace `member:REPLACE_WITH_REAL_MEMBER_ID` with a real workspace member reference before publishing. Publication checks membership; an invented label such as a team name is not a reviewer. The probabilities are integer parts per million, from 0 to 1,000,000, so receipt input has no floating-point values. The rules deny more than $1,000 or a clear non-request, escalate more than $500, then confirm high amounts, uncertainty, unclear reasons, or unauthorized-charge claims. The default allows a clear low-value request.
 
-- More than $1,000, or a clear non-request, is denied.
-- More than $500 is escalated.
-- More than $50, uncertainty, an unclear reason, or an unauthorized-charge claim
-  requires review.
-- A clear, low-value request can be allowed.
-
-Set an escalation target such as `finance-review`. For native identity,
+For native identity,
 [enroll the policy's agent with the CLI](../README.md#set-up-allowly-identity-for-agent-workflows)
 before creating an authorization. Save the completed JSON in **Allowly API /
 Allowly Identity Credential**, select **Identity: Allowly Identity**, and keep
 the runtime API key in that credential. Keep both secrets out of workflow JSON,
 items, and logs.
 
-Create one stored authorization for the policy and reuse its `authorizationId`;
+Create one stored authorization using its exact logical policy ID and positive integer edition from `policy_ref`, with optional names-only scope `["refund.create"]`, and reuse its `authorizationId`;
 do not create a new authorization for every refund. Existing authorizations stay
 unchanged after enrollment. For migration, create a new or replacement
 authorization after enrollment and update the stored workflow ID deliberately.
@@ -118,7 +212,7 @@ credential's **Test** button only tests the API key.
 ## Import and run the free demo
 
 1. On a self-hosted n8n instance that permits Code nodes, install
-   `n8n-nodes-allowly` **0.4.0**, allow the built-in `crypto` module with
+   `n8n-nodes-allowly` **0.5.0**, allow the built-in `crypto` module with
    `NODE_FUNCTION_ALLOW_BUILTIN=crypto`, then import the JSON.
 2. Create a succeeded USD PaymentIntent in Stripe test mode with enough received
    funds. No payment is created by this workflow.

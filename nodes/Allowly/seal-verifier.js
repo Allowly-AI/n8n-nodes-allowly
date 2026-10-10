@@ -1,4 +1,4 @@
-/* Bundled from @allowly/verifier 4.1.0 at allowly-receipt-format d35f181. See THIRD_PARTY_NOTICES.md. */
+/* Bundled from local unpublished @allowly/verifier 5.0.0; wire 5 only. See VERIFIER_PROVENANCE.json. */
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -36,7 +36,7 @@ module.exports = __toCommonJS(seal_verifier_entry_exports);
 // ../allowly-receipt-format/verifiers/typescript/dist/verifier.js
 var import_node_crypto = require("node:crypto");
 
-// ../allowly-receipt-format/verifiers/typescript/node_modules/canonicalize/lib/canonicalize.js
+// ../../../allowly-receipt-format/verifiers/typescript/node_modules/canonicalize/lib/canonicalize.js
 function canonicalize(object, seen = /* @__PURE__ */ new Set()) {
   if (typeof object === "number" && isNaN(object)) {
     throw new Error("NaN is not allowed");
@@ -81,7 +81,7 @@ function canonicalize(object, seen = /* @__PURE__ */ new Set()) {
   return result;
 }
 
-// ../allowly-receipt-format/verifiers/typescript/node_modules/lossless-json/lib/esm/utils.js
+// ../../../allowly-receipt-format/verifiers/typescript/node_modules/lossless-json/lib/esm/utils.js
 function isInteger(value) {
   return INTEGER_REGEX.test(value);
 }
@@ -173,7 +173,7 @@ function getSignificantDigitRange(value) {
   };
 }
 
-// ../allowly-receipt-format/verifiers/typescript/node_modules/lossless-json/lib/esm/LosslessNumber.js
+// ../../../allowly-receipt-format/verifiers/typescript/node_modules/lossless-json/lib/esm/LosslessNumber.js
 var LosslessNumber = class {
   // numeric value as string
   // type information
@@ -219,12 +219,12 @@ function isLosslessNumber(value) {
   return value && typeof value === "object" && value.isLosslessNumber || false;
 }
 
-// ../allowly-receipt-format/verifiers/typescript/node_modules/lossless-json/lib/esm/numberParsers.js
+// ../../../allowly-receipt-format/verifiers/typescript/node_modules/lossless-json/lib/esm/numberParsers.js
 function parseLosslessNumber(value) {
   return new LosslessNumber(value);
 }
 
-// ../allowly-receipt-format/verifiers/typescript/node_modules/lossless-json/lib/esm/revive.js
+// ../../../allowly-receipt-format/verifiers/typescript/node_modules/lossless-json/lib/esm/revive.js
 function revive(json, reviver) {
   return reviveValue({
     "": json
@@ -257,7 +257,7 @@ function reviveArray(array, reviver) {
   return array;
 }
 
-// ../allowly-receipt-format/verifiers/typescript/node_modules/lossless-json/lib/esm/parse.js
+// ../../../allowly-receipt-format/verifiers/typescript/node_modules/lossless-json/lib/esm/parse.js
 function parse(text, reviver, options) {
   const optionsObj = typeof options === "function" ? {
     parseNumber: options
@@ -572,12 +572,13 @@ var codeUppercaseF = 70;
 var codeLowercaseF = 102;
 
 // ../allowly-receipt-format/verifiers/typescript/dist/verifier.js
-var SPEC_VERSION = "4";
+var SPEC_VERSION = "5";
 var ACTION_DECISIONS = /* @__PURE__ */ new Set(["allow", "deny", "confirm", "escalate"]);
 var EVENT_DECISIONS = {
   "authorization.create": /* @__PURE__ */ new Set(["authorization_granted"]),
   "authorization.revoke": /* @__PURE__ */ new Set(["authorization_revoked"]),
   "budget.settle": /* @__PURE__ */ new Set(["budget_settled"]),
+  "confirmation.resolve": /* @__PURE__ */ new Set(["confirmation_approved", "confirmation_rejected"]),
   "escalation.resolve": /* @__PURE__ */ new Set(["escalation_approved", "escalation_rejected"]),
   "receipt.checkpoint": /* @__PURE__ */ new Set(["receipt_set_committed"])
 };
@@ -595,6 +596,7 @@ var REQUIRED_FIELDS = /* @__PURE__ */ new Set([
   "resource",
   "context",
   "authorization_id",
+  "policy_ref",
   "engine_version",
   "alg",
   "key_id",
@@ -788,7 +790,7 @@ async function verifyReceipt(receipt, publicKeys, opts = {}) {
       throw new VerificationError("event must be a string");
     }
     if (!Object.hasOwn(EVENT_DECISIONS, event)) {
-      throw new VerificationError(`event must be one of ["authorization.create","authorization.revoke","budget.settle","escalation.resolve","receipt.checkpoint"], got ${JSON.stringify(event)}`);
+      throw new VerificationError(`event must be one of ${JSON.stringify(Object.keys(EVENT_DECISIONS).sort())}, got ${JSON.stringify(event)}`);
     }
     const expectedDecisions = EVENT_DECISIONS[event];
     if (!expectedDecisions.has(r.decision)) {
@@ -823,6 +825,19 @@ async function verifyReceipt(receipt, publicKeys, opts = {}) {
       throw new VerificationError(`action receipt must have decision in ["allow","confirm","deny","escalate"], got ${JSON.stringify(r.decision)}`);
     }
   }
+  if (hasEvent) {
+    if (ownReceipt.event === "receipt.checkpoint") {
+      if (ownReceipt.policy_ref !== null)
+        throw new VerificationError("receipt.checkpoint must have null policy_ref");
+    } else if (ownReceipt.policy_ref === null) {
+      throw new VerificationError("authorization event must have non-null policy_ref");
+    }
+  } else if (r.authorization_id === null) {
+    if (ownReceipt.policy_ref !== null)
+      throw new VerificationError("unresolved authorization must have null policy_ref");
+  } else if (ownReceipt.policy_ref === null && ownReceipt.action !== "record.seal") {
+    throw new VerificationError("governed action must have non-null policy_ref");
+  }
   if (r.alg !== "Ed25519") {
     throw new VerificationError(`unsupported signature alg: ${JSON.stringify(r.alg)}`);
   }
@@ -844,6 +859,7 @@ async function verifyReceipt(receipt, publicKeys, opts = {}) {
     throw new VerificationError("signature verification failed");
   }
 }
+var PUBLIC_KEY_FINGERPRINT_RE = /^sha256:[0-9a-f]{64}$/;
 var SEAL_PROFILE = "allowly.seal.jcs-sha256.v1";
 var SEAL_ACTION = "record.seal";
 var SEAL_AGENT_ID = "allowly.seal";
@@ -1174,18 +1190,14 @@ function checkSchema(receipt) {
   if (sigBytes.length !== 64) {
     throw new VerificationError(`signature must decode to 64 bytes (Ed25519), got ${sigBytes.length}`);
   }
+  checkPolicyRef(receipt.policy_ref);
+  if (receipt.engine_version.length !== 71 || !PUBLIC_KEY_FINGERPRINT_RE.test(receipt.engine_version))
+    throw new VerificationError("engine_version must be sha256: followed by 64 lowercase hex characters");
   if (Object.hasOwn(receipt, "policy_eval")) {
     checkPolicyEval(receipt.policy_eval);
+    if (receipt.policy_ref === null)
+      throw new VerificationError("policy_eval requires non-null policy_ref");
   }
-}
-function isPolicyScalar(value) {
-  return value === null || typeof value === "string" || typeof value === "boolean" || typeof value === "number" && Number.isInteger(value);
-}
-function isPolicyConditionValue(value) {
-  if (isPolicyScalar(value)) {
-    return true;
-  }
-  return Array.isArray(value) && value.every((item) => isPolicyScalar(item));
 }
 function checkExactKeys(obj, expected, prefix) {
   const expectedSet = new Set(expected);
@@ -1198,32 +1210,48 @@ function checkExactKeys(obj, expected, prefix) {
     throw new VerificationError(`${prefix} missing fields: ${JSON.stringify(missing.sort())}`);
   }
 }
+function checkPolicyRef(value) {
+  if (value === null)
+    return;
+  if (typeof value !== "object" || Array.isArray(value))
+    throw new VerificationError("policy_ref must be an object or null");
+  const ref = value;
+  checkExactKeys(ref, ["policy_id", "policy_version", "definition_sha256"], "policy_ref");
+  if (typeof ref.policy_id !== "string" || !ref.policy_id)
+    throw new VerificationError("policy_ref.policy_id must be a nonempty string");
+  if (typeof ref.policy_version !== "number" || !Number.isSafeInteger(ref.policy_version) || ref.policy_version < 1)
+    throw new VerificationError("policy_ref.policy_version must be a positive safe integer");
+  if (typeof ref.definition_sha256 !== "string" || ref.definition_sha256.length !== 64 || !/^[0-9a-f]{64}$/.test(ref.definition_sha256))
+    throw new VerificationError("policy_ref.definition_sha256 must be 64 lowercase hex characters");
+}
 function checkPolicyEval(value) {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
     throw new VerificationError("policy_eval must be an object");
-  }
-  const policyEval = value;
-  checkExactKeys(policyEval, ["matched_condition", "field_value"], "policy_eval");
-  const matched = policyEval.matched_condition;
-  if (matched !== null) {
-    if (typeof matched !== "object" || Array.isArray(matched)) {
-      throw new VerificationError("policy_eval.matched_condition must be an object or null");
-    }
-    const condition = matched;
-    checkExactKeys(condition, ["field", "op", "value"], "policy_eval.matched_condition");
-    if (typeof condition.field !== "string") {
-      throw new VerificationError("policy_eval.matched_condition.field must be a string");
-    }
-    if (typeof condition.op !== "string") {
-      throw new VerificationError("policy_eval.matched_condition.op must be a string");
-    }
-    if (!isPolicyConditionValue(condition.value)) {
-      throw new VerificationError("policy_eval.matched_condition.value must be string, integer, boolean, null, or an array of those");
-    }
-  }
-  if (!isPolicyScalar(policyEval.field_value)) {
-    throw new VerificationError("policy_eval.field_value must be string, integer, boolean, or null");
-  }
+  const evidence = value;
+  checkExactKeys(evidence, ["input_sha256", "result"], "policy_eval");
+  if (typeof evidence.input_sha256 !== "string" || evidence.input_sha256.length !== 64 || !/^[0-9a-f]{64}$/.test(evidence.input_sha256))
+    throw new VerificationError("policy_eval.input_sha256 must be 64 lowercase hex characters");
+  const valueResult = evidence.result;
+  if (typeof valueResult !== "object" || valueResult === null || Array.isArray(valueResult))
+    throw new VerificationError("policy_eval.result must be an object");
+  const result = valueResult;
+  checkExactKeys(result, ["profile", "status", "decision", "target", "matched_rule_id", "evaluated_fields"], "policy_eval.result");
+  if (result.profile !== "allowly.basic.v1" || result.status !== "ok")
+    throw new VerificationError("policy_eval.result requires allowly.basic.v1 successful status");
+  if (typeof result.decision !== "string" || !ACTION_DECISIONS.has(result.decision))
+    throw new VerificationError("policy_eval.result.decision must be allow, deny, confirm, or escalate");
+  const target = result.target;
+  const validTarget = result.decision === "allow" || result.decision === "deny" ? target === null : result.decision === "confirm" ? target === "agent_owner" : typeof target === "string" && target.startsWith("member:") && target.length > 7 && [...target].length <= 256;
+  if (!validTarget)
+    throw new VerificationError("policy_eval.result.target does not match decision");
+  const rule = result.matched_rule_id;
+  if (rule !== null && (typeof rule !== "string" || !rule || [...rule].length > 128))
+    throw new VerificationError("policy_eval.result.matched_rule_id must be a bounded nonempty string or null");
+  const fields = result.evaluated_fields;
+  if (typeof fields !== "object" || fields === null || Array.isArray(fields) || Object.keys(fields).some((key) => !key || [...key].length > 128))
+    throw new VerificationError("policy_eval.result.evaluated_fields must be an object with bounded nonempty field names");
+  if (rule === null && Object.keys(fields).length)
+    throw new VerificationError("policy_eval.result default requires empty evaluated_fields");
 }
 var CHECKPOINT_ROOT_RE = /^sha256:[0-9a-f]{64}$/;
 var CHECKPOINT_CONTEXT_FIELDS = [

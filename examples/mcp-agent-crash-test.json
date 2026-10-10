@@ -220,6 +220,8 @@
       "parameters": {
         "operation": "createAuthorization",
         "policyId": "mcp_agent_crash_test_v1",
+        "policyVersion": 1,
+        "authorizationActions": "[\"mcp_demo.email.send\"]",
         "userIdentifierMode": "opaque",
         "userId": "mcp-crash-test-user"
       },

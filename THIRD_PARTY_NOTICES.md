@@ -3,7 +3,7 @@
 `nodes/Allowly/seal-verifier.js` bundles these packages for local SEAL hashing
 and receipt verification:
 
-- `@allowly/verifier` 4.1.0 — Apache License 2.0
+- `@allowly/verifier` 5.0.0 (local unpublished build) — Apache License 2.0
 - `canonicalize` 3.0.0 — Apache License 2.0
 - `lossless-json` 4.3.1 — MIT License
 

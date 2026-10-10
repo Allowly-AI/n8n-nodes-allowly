@@ -49,6 +49,8 @@ function packagedSealVector(relativePath) {
 
 test('vendored verifier and SEAL fixtures match recorded provenance', () => {
 	const provenance = require('../VERIFIER_PROVENANCE.json');
+	assert.equal(provenance.source_version, '5.0.0');
+	assert.equal(provenance.source_status, 'local_uncommitted');
 	const expected = {
 		[provenance.bundle.path]: provenance.bundle.sha256,
 		...provenance.fixtures,
@@ -1225,6 +1227,8 @@ test('keeps the email pepper in credentials and pins requests to the Allowly API
 	const parameters = {
 		operation: 'createAuthorization',
 		policyId: 'policy_123',
+		policyVersion: 1,
+		authorizationActions: '',
 		userIdentifierMode: 'emailHmac',
 		userEmail: ' Alice@Example.COM ',
 	};
@@ -1244,7 +1248,7 @@ test('keeps the email pepper in credentials and pins requests to the Allowly API
 		helpers: {
 			httpRequestWithAuthentication: async (_credentials, options) => {
 				requests.push(options);
-				return { authorization_id: 'auth_123' };
+				return { authorization_id: 'auth_123', policy_ref: { policy_id: 'policy_123', policy_version: 1, definition_sha256: 'a'.repeat(64) }, actions: ['email.send'] };
 			},
 		},
 	};
@@ -1252,7 +1256,8 @@ test('keeps the email pepper in credentials and pins requests to the Allowly API
 	const output = await new Allowly().execute.call(context);
 	const expectedUserId = 'email_hmac:v1:3ICm-xnjBrsMfGEj1mG6hCoepxjL2ZRlvmWNig2XUk0';
 	assert.equal(requests[0].url, 'https://api.allowly.ai/v1/authorizations');
-	assert.equal(requests[0].body.user_id, expectedUserId);
+	assert.deepEqual(requests[0].body, { user_id: expectedUserId, policy_id: 'policy_123', policy_version: 1 });
+	assert.deepEqual(output[0][0].json.policyRef, { policy_id: 'policy_123', policy_version: 1, definition_sha256: 'a'.repeat(64) });
 	assert.equal(output[0][0].json.userId, expectedUserId);
 });
 
@@ -1281,6 +1286,50 @@ test('budget settlement passes through the response and defaults the idempotency
 		['execution-42:rcp_check_123', 'execution-42:rcp_check_456'],
 	);
 });
+
+test('authorization requires an exact policy edition and names-only optional scope', async () => {
+	const parameters = { policyId: 'policy_123', policyVersion: 2, authorizationActions: '["email.send"]', userIdentifierMode: 'opaque', userId: 'user_123' };
+	const response = { authorization_id: 'auth_123', policy_ref: { policy_id: 'policy_123', policy_version: 2, definition_sha256: 'a'.repeat(64) }, actions: ['email.send'] };
+	const context = resolutionContext('createAuthorization', parameters, response);
+	const output = await new Allowly().execute.call(context);
+	assert.deepEqual(context.requests[0].body, { user_id: 'user_123', policy_id: 'policy_123', policy_version: 2, actions: ['email.send'] });
+	assert.deepEqual(output[0][0].json.policyRef, response.policy_ref);
+	assert.deepEqual(output[0][0].json.actions, ['email.send']);
+	assert.equal(output[0][0].json.policyVersion, 2);
+});
+
+for (const version of [undefined, true, '1', 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+	test(`authorization rejects invalid policy version ${String(version)} before HTTP`, async () => {
+		const context = resolutionContext('createAuthorization', { policyId: 'policy_123', policyVersion: version, authorizationActions: '', userIdentifierMode: 'opaque', userId: 'user_123' }, {});
+		await assert.rejects(new Allowly().execute.call(context), /Policy Version/);
+		assert.equal(context.requests.length, 0);
+	});
+}
+
+for (const scope of ['[]', '["email.send","email.send"]', '[{"name":"email.send","constraints":{}}]', '[true]', '["email.send",]']) {
+	test(`authorization rejects invalid names-only scope ${scope} before HTTP`, async () => {
+		const context = resolutionContext('createAuthorization', { policyId: 'policy_123', policyVersion: 1, authorizationActions: scope, userIdentifierMode: 'opaque', userId: 'user_123' }, {});
+		await assert.rejects(new Allowly().execute.call(context));
+		assert.equal(context.requests.length, 0);
+	});
+}
+
+for (const patch of [
+	{ policy_ref: null },
+	{ policy_ref: { policy_id: 'other_policy', policy_version: 1, definition_sha256: 'a'.repeat(64) } },
+	{ policy_ref: { policy_id: 'policy_123', policy_version: '1', definition_sha256: 'a'.repeat(64) } },
+	{ policy_ref: { policy_id: 'policy_123', policy_version: 1, definition_sha256: 'A'.repeat(64) } },
+	{ policy_ref: { policy_id: 'policy_123', policy_version: 1, definition_sha256: 'a'.repeat(64), extra: true } },
+	{ actions: [{ name: 'email.send' }] },
+	{ actions: ['email.read'] },
+]) {
+	test(`authorization rejects wrong retained response ${JSON.stringify(patch)}`, async () => {
+		const context = resolutionContext('createAuthorization', { policyId: 'policy_123', policyVersion: 1, authorizationActions: '["email.send"]', userIdentifierMode: 'opaque', userId: 'user_123' }, {
+			authorization_id: 'auth_123', policy_ref: { policy_id: 'policy_123', policy_version: 1, definition_sha256: 'a'.repeat(64) }, actions: ['email.send'], ...patch,
+		});
+		await assert.rejects(new Allowly().execute.call(context));
+	});
+}
 
 function resolutionContext(operation, parameters, response) {
 	const requests = [];
@@ -1356,3 +1405,21 @@ for (const code of [
 		);
 	});
 }
+
+test("fresh local SEAL verifier rejects a validly signed wire4 receipt", async () => {
+  const verifier = require("../nodes/Allowly/seal-verifier");
+  const fixture = JSON.parse(require("node:fs").readFileSync(require("node:path").join(__dirname, "fixtures/seal/verification-v1.json"), "utf8"));
+  const vector = fixture.should_verify[0];
+  const keys = verifier.loadKeysFromJson(fixture.public_keys);
+  const crypto = require("node:crypto");
+  const { canonicalize } = await import(require("node:url").pathToFileURL(require("node:path").resolve(__dirname, "../../allowly-receipt-format/verifiers/typescript/dist/verifier.js")));
+  const privateKey = crypto.createPrivateKey({ key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), Buffer.alloc(32)]), format: "der", type: "pkcs8" });
+  const payload = { ...vector.receipt, schema_version: "4" };
+  delete payload.signature;
+  const signature = crypto.sign(null, canonicalize(payload), privateKey);
+  assert.equal(crypto.verify(null, canonicalize(payload), crypto.createPublicKey(privateKey), signature), true);
+  const result = await verifier.verifySealJson(vector.raw_json, { ...payload, signature: signature.toString("base64url") }, keys, { expectedWorkspaceId: fixture.expected_workspace_id });
+  assert.equal(result.signatureVerified, false);
+  assert.equal(result.recordMatches, false);
+  assert.equal(result.failureReason, "receipt_verification_failed");
+});

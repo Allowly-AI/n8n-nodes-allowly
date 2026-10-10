@@ -27,6 +27,21 @@ export class AllowlyApi implements ICredentialType {
 
 	properties: INodeProperties[] = [
 		{
+			displayName: 'Execution Workspace ID',
+			name: 'executionWorkspaceId',
+			type: 'string',
+			default: '',
+			description: 'Trusted workspace ID for Execute and resolution callbacks. Copy it from your workspace, not from a callback.',
+		},
+		{
+			displayName: 'Resolution Webhook Signing Secret',
+			name: 'resolutionWebhookSigningSecret',
+			type: 'string',
+			typeOptions: { password: true },
+			default: '',
+			description: 'Private whsec_ secret for the fixed workspace resolution callback. Notifications only wake saved operations.',
+		},
+		{
 			displayName: 'API Key',
 			name: 'apiKey',
 			type: 'string',

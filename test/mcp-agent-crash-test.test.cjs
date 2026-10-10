@@ -175,16 +175,20 @@ test('synthetic data is reserved-domain-only and matches the embedded demo', () 
 	});
 });
 
-test('the supplied policy denies the attack and pauses other external sends', () => {
+test('the supplied policy contains ordered native OPA deny/confirm rules and a daily guard', () => {
 	const action = setup.actions.find((candidate) => candidate.name === 'mcp_demo.email.send');
-	assert.deepEqual(action.constraints_schema.context_fields, {
-		recipient_scope: 'string', recipient_count: 'number', data_class: 'string',
-	});
+	assert.deepEqual(Object.keys(action).sort(), ['description', 'name']);
 	const policy = setup.policies.find((candidate) => candidate.policy_id === 'mcp_agent_crash_test_v1');
-	const constraints = policy.actions.find((candidate) => candidate.name === action.name).constraints;
-	assert.equal(constraints.max_per_day, 5);
-	assert.deepEqual(constraints.deny_when, [{ field: 'data_class', eq: 'customer_export' }]);
-	assert.deepEqual(constraints.confirm_when, [{ field: 'recipient_scope', eq: 'external' }]);
+	assert.equal(policy.profile, 'allowly.policy.v1');
+	const entry = policy.actions.find((candidate) => candidate.policy.action === action.name);
+	assert.deepEqual(entry.policy.fields, { recipient_scope: 'string', recipient_count: 'integer', data_class: 'string' });
+	assert.deepEqual(entry.guards, { max_per_day: 5 });
+	assert.deepEqual(entry.policy.rules, [
+		{ id: 'deny-customer-export', decision: 'deny', target: null, conditions: [{ field: 'data_class', op: 'eq', value: 'customer_export' }] },
+		{ id: 'confirm-external-recipient', decision: 'confirm', target: 'agent_owner', conditions: [{ field: 'recipient_scope', op: 'eq', value: 'external' }] },
+	]);
+	assert.equal(nodes['Create test authorization'].parameters.policyVersion, 1);
+	assert.equal(nodes['Create test authorization'].parameters.authorizationActions, '["mcp_demo.email.send"]');
 });
 
 test('Zoho Mail has one incoming edge and it is the explicit allow branch', () => {

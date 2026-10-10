@@ -2,48 +2,61 @@
   "actions": [
     {
       "name": "mcp_demo.email.send",
-      "description": "Send an email through the Allowly n8n MCP crash-test workflow.",
-      "requires_confirm": false,
-      "requires_escalation": false,
-      "constraints_schema": {
-        "context_fields": {
-          "recipient_scope": "string",
-          "recipient_count": "number",
-          "data_class": "string"
-        }
-      }
+      "description": "Send the requested email after Allowly has checked trusted local context."
     }
   ],
   "policies": [
     {
+      "profile": "allowly.policy.v1",
       "policy_id": "mcp_agent_crash_test_v1",
       "agent_id": "n8n_mcp_agent",
-      "description": "Blocks customer-list exports and pauses other external email before the Zoho Mail MCP call can run.",
+      "description": "Deny customer exports and confirm other external sends.",
       "default_expiry_days": 30,
       "actions": [
         {
-          "name": "mcp_demo.email.send",
-          "constraints": {
-            "max_per_day": 5,
-            "deny_when": [
+          "policy": {
+            "profile": "allowly.basic.v1",
+            "action": "mcp_demo.email.send",
+            "default_decision": "allow",
+            "default_target": null,
+            "fields": {
+              "recipient_scope": "string",
+              "recipient_count": "integer",
+              "data_class": "string"
+            },
+            "rules": [
               {
-                "field": "data_class",
-                "eq": "customer_export"
-              }
-            ],
-            "confirm_when": [
+                "id": "deny-customer-export",
+                "decision": "deny",
+                "target": null,
+                "conditions": [
+                  {
+                    "field": "data_class",
+                    "op": "eq",
+                    "value": "customer_export"
+                  }
+                ]
+              },
               {
-                "field": "recipient_scope",
-                "eq": "external"
+                "id": "confirm-external-recipient",
+                "decision": "confirm",
+                "target": "agent_owner",
+                "conditions": [
+                  {
+                    "field": "recipient_scope",
+                    "op": "eq",
+                    "value": "external"
+                  }
+                ]
               }
             ]
-          }
+          },
+          "guards": {
+            "max_per_day": 5
+          },
+          "executable_operations": []
         }
-      ],
-      "requires_confirm_for": [],
-      "requires_escalation_for": [],
-      "requires_deny_for": [],
-      "escalation_targets": {}
+      ]
     }
   ]
 }

@@ -27,10 +27,10 @@ Use a test n8n project and a Zoho Mail account reserved for testing. The supplie
 Install the current package release:
 
 ```text
-n8n-nodes-allowly@0.4.0
+n8n-nodes-allowly-0.5.0.tgz (local unpublished build)
 ```
 
-Version **0.4.0** supports native **Allowly Identity**, Auth0, and unbound
+Version **0.5.0** supports native **Allowly Identity**, Auth0, and unbound
 authorizations through the **Identity** selector.
 
 Apply the bundled action and policy from a signed-in Allowly CLI:
