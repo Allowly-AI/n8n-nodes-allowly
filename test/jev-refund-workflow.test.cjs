@@ -79,6 +79,10 @@ async function run(options = {}) {
 
 	function scope() {
 		return {
+			require: (name) => {
+				assert.equal(name, 'crypto', 'only the crypto builtin is available to Code nodes');
+				return require('node:crypto');
+			},
 			$json: item,
 			$input: { first: () => ({ json: item }), all: () => [{ json: item }] },
 			$: (name) => ({ first: () => ({ json: outputs[name] }) }),
@@ -179,6 +183,7 @@ async function run(options = {}) {
 						status: 'succeeded',
 						currency: 'usd',
 						amount_received: 100000,
+						...options.payment,
 					};
 				} else if (call.url === 'https://api.stripe.com/v1/refunds') {
 					item = {
@@ -327,6 +332,64 @@ test('live mode sends the fixed Jev contract once and normalizes its result befo
 	assert.equal(frozen.jev.refundReasonConfidencePpm, 980000);
 	assert.equal(frozen.context.refund_requested_ppm, frozen.jev.refundRequestedPpm);
 	assert.equal(JSON.stringify(checkCalls(result)[0].body).includes(request.customerMessage), false);
+});
+
+test('maximum valid refund and Jev identifiers fit the Allowly resource limit', async () => {
+	const result = await run({
+		request: {
+			jevMode: 'live',
+			refundRequestId: 'r'.repeat(64),
+			customerMessageId: 'm'.repeat(64),
+			paymentIntentId: 'pi_' + 'p'.repeat(80),
+			amountMinor: 99999999,
+			customerMessage: 'm'.repeat(2000),
+		},
+		payment: { amount_received: 99999999 },
+		jevResponse: liveJevDecision({ id: 'gen-dec-' + 'g'.repeat(200) }),
+	});
+	assert.equal(result.error, null);
+	const frozen = result.outputs['Freeze Jev decision'];
+	assert.match(frozen.resource, /^stripe-refund:[a-f0-9]{64}$/);
+	assert.ok(frozen.resource.length <= 256, 'resource must fit the real API limit');
+	assert.equal(checkCalls(result).length, 1);
+	assert.equal(checkCalls(result)[0].body.resource, frozen.resource);
+	assert.equal(refundCalls(result)[0].body.amount, frozen.amountMinor);
+	assert.equal(refundCalls(result)[0].body.payment_intent, frozen.paymentIntentId);
+	assert.equal(refundCalls(result)[0].headers['Idempotency-Key'], 'allowly-refund:' + frozen.refundRequestId);
+});
+
+test('the same frozen refund and Jev snapshot has a stable resource across executions', async () => {
+	const first = await run({ request: { jevMode: 'live' }, executionId: 'execution-first' });
+	const retry = await run({ request: { jevMode: 'live' }, executionId: 'execution-retry' });
+	assert.equal(first.error, null);
+	assert.equal(retry.error, null);
+	assert.equal(first.outputs['Freeze Jev decision'].resource, retry.outputs['Freeze Jev decision'].resource);
+	assert.notEqual(checkCalls(first)[0].headers['Idempotency-Key'], checkCalls(retry)[0].headers['Idempotency-Key']);
+});
+
+test('changed refund fields or selected Jev facts produce a different review resource', async () => {
+	const baseline = await run({ request: { jevMode: 'live' } });
+	assert.equal(baseline.error, null);
+	const originalResource = baseline.outputs['Freeze Jev decision'].resource;
+	const lowerConfidence = liveJevDecision();
+	lowerConfidence.answers.refund_reason.confidence = 0.9;
+	const changedRequestScore = liveJevDecision();
+	changedRequestScore.answers.refund_requested.noul = 0.95;
+	for (const [name, options] of [
+		['refund amount', { request: { amountMinor: 2501 } }],
+		['refund request ID', { request: { refundRequestId: 'refund-jev-002' } }],
+		['payment intent', { request: { paymentIntentId: 'pi_other123' } }],
+		['message ID', { request: { customerMessageId: 'message-002' } }],
+		['Jev generation', { jevResponse: liveJevDecision({ id: 'gen-dec-another123' }) }],
+		['Jev model', { jevResponse: liveJevDecision({ model: 'typesafe/jev-1.13' }) }],
+		['selected confidence', { jevResponse: lowerConfidence }],
+		['refund request score', { jevResponse: changedRequestScore }],
+		['selected reason and route', { jevResponse: unclearJevDecision() }],
+	]) {
+		const changed = await run({ ...options, request: { jevMode: 'live', ...options.request } });
+		assert.equal(changed.error, null, name);
+		assert.notEqual(changed.outputs['Freeze Jev decision'].resource, originalResource, name);
+	}
 });
 
 test('Allowly receives only receipt-safe selected Jev facts', async () => {

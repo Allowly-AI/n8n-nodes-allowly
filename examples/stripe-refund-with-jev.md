@@ -118,7 +118,8 @@ credential's **Test** button only tests the API key.
 ## Import and run the free demo
 
 1. On a self-hosted n8n instance that permits Code nodes, install
-   `n8n-nodes-allowly` **0.4.0**, then import the JSON.
+   `n8n-nodes-allowly` **0.4.0**, allow the built-in `crypto` module with
+   `NODE_FUNCTION_ALLOW_BUILTIN=crypto`, then import the JSON.
 2. Create a succeeded USD PaymentIntent in Stripe test mode with enough received
    funds. No payment is created by this workflow.
 3. Select the same Stripe test credential on **Read Stripe payment** and
@@ -187,6 +188,13 @@ answer still reaches Allowly so the policy can return a recorded confirm, deny,
 or escalation instead of losing the decision at an unrecorded branch.
 
 ## Review and retry rules
+
+The frozen resource is `stripe-refund:` plus a SHA-256 digest of a JSON array
+containing the refund fields and selected Jev facts, including its model and
+provider. The digest is a compact identifier for that snapshot. The resource is
+78 characters, within Allowly's 256-character limit. The same snapshot keeps the
+same resource across retries; changed refund fields or selected Jev facts change
+it. The readable Allowly context stays unchanged.
 
 For confirmation or escalation, the execution pauses for four minutes at
 **Wait for reviewer**. POST only this JSON to the execution's resume URL with the
