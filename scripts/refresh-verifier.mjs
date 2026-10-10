@@ -2,6 +2,7 @@
 import { build } from "esbuild";
 import { copyFile, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -35,8 +36,8 @@ await writeFile(resolve(root, "VERIFIER_PROVENANCE.json"), JSON.stringify({
   source_package: pkg.name,
   source_version: pkg.version,
   source_repository: "https://github.com/Allowly-AI/allowly-receipt-format",
-  source_base_commit: "6da0fdc72ebd683e079b5e920fac116548839c75",
-  source_status: "local_uncommitted",
+  source_base_commit: execFileSync("git", ["-C", source, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+  source_status: execFileSync("git", ["-C", source, "status", "--porcelain"], { encoding: "utf8" }).trim() ? "local_uncommitted" : "local_committed",
   bundle: { path: bundlePath, sha256: await sha256(resolve(root, bundlePath)) },
   fixtures,
 }, null, 2) + "\n");

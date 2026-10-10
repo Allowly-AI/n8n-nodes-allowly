@@ -59,7 +59,8 @@ function packagedSealVector(relativePath) {
 test('vendored verifier and SEAL fixtures match recorded provenance', () => {
 	const provenance = require('../VERIFIER_PROVENANCE.json');
 	assert.equal(provenance.source_version, '5.0.0');
-	assert.equal(provenance.source_status, 'local_uncommitted');
+	assert.match(provenance.source_base_commit, /^[a-f0-9]{40}$/);
+	assert.ok(['local_committed', 'local_uncommitted'].includes(provenance.source_status));
 	const expected = {
 		[provenance.bundle.path]: provenance.bundle.sha256,
 		...provenance.fixtures,
