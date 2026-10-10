@@ -1357,13 +1357,9 @@ async function verifyReceipt(receipt, publicKeys, opts = {}) {
   if (!Number.isFinite(nowMs)) {
     throw new VerificationError("now must be a valid Date");
   }
-  if (ownReceipt.schema_version !== SPEC_VERSION) {
-    throw new VerificationError(`unsupported schema_version: ${JSON.stringify(ownReceipt.schema_version)} (want "${SPEC_VERSION}")`);
-  }
   if (opts.expectedWorkspaceId !== void 0 && ownReceipt.workspace_id !== opts.expectedWorkspaceId) {
     throw new VerificationError(`workspace_id mismatch: receipt has ${JSON.stringify(ownReceipt.workspace_id)}, expected ${JSON.stringify(opts.expectedWorkspaceId)}`);
   }
-  checkSchema(ownReceipt);
   const r = decoded;
   const hasAction = Object.hasOwn(ownReceipt, "action");
   const hasEvent = Object.hasOwn(ownReceipt, "event");

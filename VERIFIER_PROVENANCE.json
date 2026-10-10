@@ -2,11 +2,11 @@
   "source_package": "@allowly/verifier",
   "source_version": "5.0.0",
   "source_repository": "https://github.com/Allowly-AI/allowly-receipt-format",
-  "source_base_commit": "0077289893c48ffc1a266f2ea910fd43ecd184da",
+  "source_base_commit": "1d898b9a7385e0b0eeb5d88c0a9be7d6a5658f83",
   "source_status": "local_committed",
   "bundle": {
     "path": "nodes/Allowly/seal-verifier.js",
-    "sha256": "d4811d1bea3c7e790570590545379a923f04f226658d737ccd2e92a26f7e3695"
+    "sha256": "dbdb7c82ad8b6565d071c9910c7f0feab3f16e9a5252f41a3f78c1e5b93a1477"
   },
   "fixtures": {
     "test/fixtures/seal/profile-v1.json": "7c86f0e2086b00fc1a4306eb29f2e158e8f464669804323d40c020f3e9d3367f",
