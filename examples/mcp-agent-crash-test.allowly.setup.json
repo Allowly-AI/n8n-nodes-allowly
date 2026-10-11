@@ -17,8 +17,8 @@
           "policy": {
             "profile": "allowly.basic.v1",
             "action": "mcp_demo.email.send",
-            "default_decision": "allow",
-            "default_target": null,
+            "decision": "allow",
+            "target": null,
             "fields": {
               "recipient_scope": "string",
               "recipient_count": "integer",

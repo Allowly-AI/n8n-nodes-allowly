@@ -42,7 +42,7 @@ fixture as a live TypeSafe result. Change the message only after switching to
 
 ## Prepare Allowly once
 
-Create the catalog action `refund.create`, then publish this complete flat policy definition. The first matching rule wins. Each alternative below is a separate ordered rule; conditions within one rule are all required.
+Create the catalog action `refund.create`, then publish this complete flat policy definition. The action decision and matching rules use fixed priority `deny > escalate > confirm > allow`. A rule cannot weaken the action decision. An action-level deny always wins; otherwise the first matching rule at the winning priority supplies its target and evidence. At least one condition within a rule must match (OR). When no rule wins, the action decision applies.
 
 ```json
 {
@@ -55,8 +55,8 @@ Create the catalog action `refund.create`, then publish this complete flat polic
       "policy": {
         "profile": "allowly.basic.v1",
         "action": "refund.create",
-        "default_decision": "allow",
-        "default_target": null,
+        "decision": "allow",
+        "target": null,
         "fields": {
           "refund_request_id": "string",
           "customer_message_id": "string",
@@ -192,7 +192,7 @@ Create the catalog action `refund.create`, then publish this complete flat polic
 }
 ```
 
-Use the actual agent ID and replace `member:REPLACE_WITH_REAL_MEMBER_ID` with a real workspace member reference before publishing. Publication checks membership; an invented label such as a team name is not a reviewer. The probabilities are integer parts per million, from 0 to 1,000,000, so receipt input has no floating-point values. The rules deny more than $1,000 or a clear non-request, escalate more than $500, then confirm high amounts, uncertainty, unclear reasons, or unauthorized-charge claims. The default allows a clear low-value request.
+Use the actual agent ID and replace `member:REPLACE_WITH_REAL_MEMBER_ID` with a real workspace member reference before publishing. Publication checks membership; an invented label such as a team name is not a reviewer. The probabilities are integer parts per million, from 0 to 1,000,000, so receipt input has no floating-point values. The rules deny more than $1,000 or a clear non-request, escalate more than $500, then confirm high amounts, uncertainty, unclear reasons, or unauthorized-charge claims. The action allows a clear low-value request.
 
 For native identity,
 [enroll the policy's agent with the CLI](../README.md#set-up-allowly-identity-for-agent-workflows)

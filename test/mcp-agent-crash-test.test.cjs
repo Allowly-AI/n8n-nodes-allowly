@@ -175,12 +175,15 @@ test('synthetic data is reserved-domain-only and matches the embedded demo', () 
 	});
 });
 
-test('the supplied policy contains ordered native OPA deny/confirm rules and a daily guard', () => {
+test('the supplied policy contains an action decision, conditional deny/confirm rules, and a daily guard', () => {
 	const action = setup.actions.find((candidate) => candidate.name === 'mcp_demo.email.send');
 	assert.deepEqual(Object.keys(action).sort(), ['description', 'name']);
 	const policy = setup.policies.find((candidate) => candidate.policy_id === 'mcp_agent_crash_test_v1');
 	assert.equal(policy.profile, 'allowly.policy.v1');
 	const entry = policy.actions.find((candidate) => candidate.policy.action === action.name);
+	assert.deepEqual(Object.keys(entry.policy).sort(), ['action', 'decision', 'fields', 'profile', 'rules', 'target']);
+	assert.equal(entry.policy.decision, 'allow');
+	assert.equal(entry.policy.target, null);
 	assert.deepEqual(entry.policy.fields, { recipient_scope: 'string', recipient_count: 'integer', data_class: 'string' });
 	assert.deepEqual(entry.guards, { max_per_day: 5 });
 	assert.deepEqual(entry.policy.rules, [
@@ -189,6 +192,18 @@ test('the supplied policy contains ordered native OPA deny/confirm rules and a d
 	]);
 	assert.equal(nodes['Create test authorization'].parameters.policyVersion, 1);
 	assert.equal(nodes['Create test authorization'].parameters.authorizationActions, '["mcp_demo.email.send"]');
+});
+
+test('policy examples pass the maintained SDK definition validator', async () => {
+	const { validatePolicyDefinition } = await import('../../allowly-sdk-ts/dist/index.js');
+	for (const name of ['mcp-agent-crash-test.allowly.setup.json', 'stripe-refund-with-approval.md', 'stripe-refund-with-jev.md']) {
+		const text = readFileSync(example(name), 'utf8');
+		const value = JSON.parse(name.endsWith('.md') ? text.match(/```json\n([\s\S]*?)\n```/)[1] : text);
+		for (const policy of value.policies ?? [value]) {
+			const { policy_id, description, ...definition } = policy;
+			assert.deepEqual(validatePolicyDefinition(definition), definition);
+		}
+	}
 });
 
 test('Zoho Mail has one incoming edge and it is the explicit allow branch', () => {

@@ -17,7 +17,7 @@ workflows. For one local amount threshold, a native IF node may be sufficient.
 
 ## 1. Prepare Allowly once
 
-Create the catalog action `refund.create`, then publish a complete flat policy definition with ordered OPA rules:
+Create the catalog action `refund.create`, then publish a complete flat policy definition:
 
 ```json
 {
@@ -30,8 +30,8 @@ Create the catalog action `refund.create`, then publish a complete flat policy d
       "policy": {
         "profile": "allowly.basic.v1",
         "action": "refund.create",
-        "default_decision": "allow",
-        "default_target": null,
+        "decision": "allow",
+        "target": null,
         "fields": {
           "refund_request_id": "string",
           "payment_intent_id": "string",
@@ -85,7 +85,7 @@ Create the catalog action `refund.create`, then publish a complete flat policy d
 }
 ```
 
-Use the actual agent ID. Replace `member:REPLACE_WITH_REAL_MEMBER_ID` with a real workspace member reference before publishing; do not invent a team label or reviewer ID. Publication checks membership. The first matching rule wins, so the rules above deny more than $1,000, escalate more than $500, then confirm more than $50. The default allows smaller refunds. Setup credentials configure and publish policies; runtime keys create grants and check them.
+Use the actual agent ID. Replace `member:REPLACE_WITH_REAL_MEMBER_ID` with a real workspace member reference before publishing; do not invent a team label or reviewer ID. Publication checks membership. The action decision and matching rules use fixed priority `deny > escalate > confirm > allow`, so the rules above deny more than $1,000, escalate more than $500, then confirm more than $50. A rule cannot weaken the action decision. At least one condition within each rule must match (OR). The action allows smaller refunds when no rule matches. Setup credentials configure and publish policies; runtime keys create grants and check them.
 
 For native identity, [enroll this agent with the CLI](../README.md#set-up-allowly-identity-for-agent-workflows)
 before creating the authorization. Use the exact agent ID from the policy, then

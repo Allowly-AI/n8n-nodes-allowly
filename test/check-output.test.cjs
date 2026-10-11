@@ -139,6 +139,12 @@ test('context accepts a native object from an expression', () => {
 	assert.equal(parseContext(context, null, 0), context);
 });
 
+test('context preserves heterogeneous scalar lists from mapped objects and JSON text', () => {
+	const context = { items: [null, true, 0, 'x', true] };
+	assert.equal(parseContext(context, null, 0), context);
+	assert.deepEqual(parseContext(JSON.stringify(context), null, 0), context);
+});
+
 test('estimated cost removes floating-point dust', () => {
 	assert.equal(parseEstimatedCostMicros(2.01 * 1_000_000, null, 0), 2_010_000);
 });
