@@ -4,7 +4,12 @@ const { generateKeyPairSync, verify } = require('node:crypto');
 const { NodeOperationError } = require('n8n-workflow');
 const { Allowly } = require('../dist/nodes/Allowly/Allowly.node.js');
 const { nativeAgentToken } = require('../dist/nodes/Allowly/native-identity.js');
-const { hashSealValue } = require('../dist/nodes/Allowly/seal-verifier.js');
+const { hashSealValue, decodeReceipt } = require('../dist/nodes/Allowly/seal-verifier.js');
+
+function receiptFixture() {
+	const vector = require('./fixtures/seal/verification-v1.json').should_verify[0].receipt;
+	return { ...vector, payload: Buffer.from(JSON.stringify({ ...decodeReceipt(vector), receipt_id: 'rcp_native_test', issued_at: '2026-10-01T10:00:00.000Z' })).toString('base64url') };
+}
 
 function nativeFixture(overrides = {}) {
 	const { privateKey, publicKey } = generateKeyPairSync('ed25519');
@@ -196,7 +201,7 @@ for (const operation of ['check', 'checkAndEnforce']) {
 }
 
 test('native Acknowledge Receipt verifies identity and binds the exact receipt hash', async () => {
-	const receipt = { receipt_id: 'rcp_native_test', issued_at: '2026-10-01T10:00:00Z', signature: 'signed' };
+	const receipt = receiptFixture();
 	const context = nativeContext({
 		parameters: { operation: 'acknowledgeReceipt', ackReceipt: receipt,
 			ackClientTimestamp: '2026-10-01T10:00:03.456Z', ackIdempotencyKey: 'ack-native-test' },
@@ -277,7 +282,7 @@ test('a missing native credential fails closed when Check continues on failure',
 test('native Acknowledge Receipt fails closed on an API identity rejection', async () => {
 	const context = nativeContext({
 		parameters: { operation: 'acknowledgeReceipt',
-			ackReceipt: { receipt_id: 'rcp_native_test', issued_at: '2026-10-01T10:00:00Z', signature: 'signed' },
+			ackReceipt: receiptFixture(),
 			ackClientTimestamp: '2026-10-01T10:00:03Z', ackIdempotencyKey: 'ack-native-test' },
 		continueOnFail: true,
 		requestHandler: () => {

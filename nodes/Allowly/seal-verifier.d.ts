@@ -17,6 +17,13 @@ export type SealVerificationResult = {
 };
 
 export const SEAL_PROFILE: string;
+/** Decodes strict JWS evidence for display; does not verify its signature. */
+export function decodeReceipt(receipt: Record<string, unknown>): Record<string, unknown> & {
+	receipt_id: string;
+	issued_at: string;
+	workspace_id: string;
+	context: Record<string, unknown>;
+};
 export function hashSealJson(rawJson: string | Uint8Array): string;
 export function hashSealValue(record: unknown): string;
 export function verifySealJson(

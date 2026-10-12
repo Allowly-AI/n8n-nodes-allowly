@@ -5,6 +5,10 @@ const { join } = require('node:path');
 const vm = require('node:vm');
 const { Workflow } = require('n8n-workflow');
 const { Allowly } = require('../dist/nodes/Allowly/Allowly.node.js');
+const receiptVerifier = require('../dist/nodes/Allowly/seal-verifier.js');
+const receiptVector = JSON.parse(readFileSync(join(__dirname, 'fixtures/workflow-receipts.json')));
+const signedReceipt = receiptVector.receipts.mcp;
+const signedReceiptId = receiptVerifier.decodeReceipt(signedReceipt).receipt_id;
 
 const example = (name) => join(__dirname, '..', 'examples', name);
 const workflowText = readFileSync(example('mcp-agent-crash-test.json'), 'utf8');
@@ -19,6 +23,10 @@ const nodes = Object.fromEntries(workflow.nodes.map((node) => [node.name, node])
 
 function runCode(name, json = {}) {
 	return vm.runInNewContext(`(() => {\n${nodes[name].parameters.jsCode}\n})()`, {
+		require: (name) => {
+			assert.equal(name, 'n8n-nodes-allowly/dist/nodes/Allowly/seal-verifier.js');
+			return receiptVerifier;
+		},
 		$json: structuredClone(json),
 	});
 }
@@ -175,16 +183,35 @@ test('synthetic data is reserved-domain-only and matches the embedded demo', () 
 	});
 });
 
-test('the supplied policy denies the attack and pauses other external sends', () => {
+test('the supplied policy contains an action decision, conditional deny/confirm rules, and a daily guard', () => {
 	const action = setup.actions.find((candidate) => candidate.name === 'mcp_demo.email.send');
-	assert.deepEqual(action.constraints_schema.context_fields, {
-		recipient_scope: 'string', recipient_count: 'number', data_class: 'string',
-	});
+	assert.deepEqual(Object.keys(action).sort(), ['description', 'name']);
 	const policy = setup.policies.find((candidate) => candidate.policy_id === 'mcp_agent_crash_test_v1');
-	const constraints = policy.actions.find((candidate) => candidate.name === action.name).constraints;
-	assert.equal(constraints.max_per_day, 5);
-	assert.deepEqual(constraints.deny_when, [{ field: 'data_class', eq: 'customer_export' }]);
-	assert.deepEqual(constraints.confirm_when, [{ field: 'recipient_scope', eq: 'external' }]);
+	assert.equal(policy.profile, 'allowly.policy.v1');
+	const entry = policy.actions.find((candidate) => candidate.policy.action === action.name);
+	assert.deepEqual(Object.keys(entry.policy).sort(), ['action', 'decision', 'fields', 'profile', 'rules', 'target']);
+	assert.equal(entry.policy.decision, 'allow');
+	assert.equal(entry.policy.target, null);
+	assert.deepEqual(entry.policy.fields, { recipient_scope: 'string', recipient_count: 'integer', data_class: 'string' });
+	assert.deepEqual(entry.guards, { max_per_day: 5 });
+	assert.deepEqual(entry.policy.rules, [
+		{ id: 'deny-customer-export', decision: 'deny', target: null, conditions: [{ field: 'data_class', op: 'eq', value: 'customer_export' }] },
+		{ id: 'confirm-external-recipient', decision: 'confirm', target: 'agent_owner', conditions: [{ field: 'recipient_scope', op: 'eq', value: 'external' }] },
+	]);
+	assert.equal(nodes['Create test authorization'].parameters.policyVersion, 1);
+	assert.equal(nodes['Create test authorization'].parameters.authorizationActions, '["mcp_demo.email.send"]');
+});
+
+test('policy examples pass the maintained SDK definition validator', async () => {
+	const { validatePolicyDefinition } = await import('@allowly/sdk');
+	for (const name of ['mcp-agent-crash-test.allowly.setup.json', 'stripe-refund-with-approval.md', 'stripe-refund-with-jev.md']) {
+		const text = readFileSync(example(name), 'utf8');
+		const value = JSON.parse(name.endsWith('.md') ? text.match(/```json\n([\s\S]*?)\n```/)[1] : text);
+		for (const policy of value.policies ?? [value]) {
+			const { policy_id, description, ...definition } = policy;
+			assert.deepEqual(validatePolicyDefinition(definition), definition);
+		}
+	}
 });
 
 test('Zoho Mail has one incoming edge and it is the explicit allow branch', () => {
@@ -211,9 +238,12 @@ test('Zoho Mail has one incoming edge and it is the explicit allow branch', () =
 test('only a complete, internally consistent allow passes the final branch', () => {
 	const valid = (decision) => ({
 		action: 'mcp_demo.email.send',
+			authorizationId: 'auth_fixture',
 		decision,
 		reason: 'fixture_reason',
 		receipt: { status: 'pending', receipt_id: `rcp_${decision}` },
+			receiptId: `rcp_${decision}`,
+			workspaceId: receiptVector.expected_workspace_id,
 		results: { 'mcp_demo.email.send': { decision } },
 	});
 	for (const decision of ['allow', 'deny', 'confirm', 'escalate']) {
@@ -234,4 +264,24 @@ test('only a complete, internally consistent allow passes the final branch', () 
 	]) {
 		assert.throws(() => runCode('Validate Allowly decision', malformed), /Invalid Allowly decision/);
 	}
+});
+
+test('MCP decision accepts original wire-5 JWS but never treats decoding as verification', () => {
+	const decision = { action: 'mcp_demo.email.send', authorizationId: 'auth_fixture', decision: 'allow', reason: 'authorization_granted_action_active',
+		receipt: { status: 'signed', receipt: signedReceipt }, receiptId: signedReceiptId,
+		workspaceId: receiptVector.expected_workspace_id, results: { 'mcp_demo.email.send': { decision: 'allow' } } };
+	const output = runCode('Validate Allowly decision', decision)[0].json;
+	assert.deepEqual(structuredClone(output.receipt), decision.receipt);
+	assert.equal(output.receipt_id, signedReceiptId);
+	assert.equal(output.receiptVerification, 'not_performed');
+	assert.equal(Object.hasOwn(output, 'signatureVerified'), false);
+	for (const malformed of [
+		{ ...decision, workspaceId: undefined }, { ...decision, workspaceId: 'ws_other' },
+		{ ...decision, authorizationId: 'auth_other' }, { ...decision, reason: 'another_reason' },
+		{ ...decision, decision: 'deny', results: { 'mcp_demo.email.send': { decision: 'deny' } } },
+		{ ...decision, receiptId: 'rcp_other' }, { ...decision, receipt: { status: 'unknown', receipt_id: signedReceiptId } },
+		{ ...decision, receipt: { status: 'signed', receipt: { receipt_id: signedReceiptId, signature: 'old-flat' } } },
+		{ ...decision, receipt: { status: 'signed', receipt: { ...signedReceipt, payload: '%' } } },
+	]) assert.throws(() => runCode('Validate Allowly decision', malformed));
+	assert.throws(() => vm.runInNewContext(`(() => {${nodes['Validate Allowly decision'].parameters.jsCode}})()`, { $json: decision }), /require is not defined/);
 });

@@ -1,11 +1,13 @@
 # Process Stripe refunds with Allowly approval and reviewer checks
 
 [Import this workflow JSON](stripe-refund-with-approval.json).
-It targets **n8n-nodes-allowly 0.4.0** and uses n8n's standard HTTP, Code, IF,
+It targets **n8n-nodes-allowly 0.5.0** and uses n8n's standard HTTP, Code, IF,
 and Wait nodes. The workflow is inactive and contains no credentials or pinned data.
 Use a self-hosted n8n instance that permits this community node and Code nodes.
 
-Version **0.4.0** supports native **Allowly Identity**, Auth0, and unbound
+Set **Execution Workspace ID** in the Allowly credential from your trusted workspace settings. Do not copy it from a receipt. Install the same Allowly package on the Code runtime or task runner and set `NODE_FUNCTION_ALLOW_EXTERNAL=n8n-nodes-allowly` (keep other needed entries; never use `*`). The workflow stops if the maintained receipt decoder is unavailable. **Fetch decision receipt** uses the node's normalized `receiptUrl`, so it follows `ALLOWLY_N8N_API_BASE_URL` and ignores server-supplied URLs. Signed receipt payloads must match the configured workspace. Export preserves the original JWS; decoding is not signature verification.
+
+Version **0.5.0** supports native **Allowly Identity**, Auth0, and unbound
 authorizations through the **Identity** selector.
 
 A refund request is checked against a stored Allowly authorization. Only `allow`
@@ -17,23 +19,75 @@ workflows. For one local amount threshold, a native IF node may be sufficient.
 
 ## 1. Prepare Allowly once
 
-Use the dashboard or setup API to create an agent and the action `refund.create`.
-Declare these action context fields: `refund_request_id` and `payment_intent_id`
-as strings, `amount_minor` as an integer, and `currency` and `reason` as strings.
-Create a policy for the agent with that action and `default_expiry_days: 7`.
-For a USD demonstration, configure these constraints under that policy action:
+Create the catalog action `refund.create`, then publish a complete flat policy definition:
 
-| Constraint | Condition | Result |
-|---|---|---|
-| `deny_when` | `amount_minor` greater than `100000` | Deny above $1,000. |
-| `escalate_when` | `amount_minor` greater than `50000` | Escalate above $500 when not denied. |
-| `confirm_when` | `amount_minor` greater than `5000` | Confirm above $50 when not denied or escalated. |
+```json
+{
+  "profile": "allowly.policy.v1",
+  "policy_id": "refund-basic",
+  "agent_id": "refund-agent",
+  "default_expiry_days": 7,
+  "actions": [
+    {
+      "policy": {
+        "profile": "allowly.basic.v1",
+        "action": "refund.create",
+        "decision": "allow",
+        "target": null,
+        "fields": {
+          "refund_request_id": "string",
+          "payment_intent_id": "string",
+          "amount_minor": "integer",
+          "currency": "string",
+          "reason": "string"
+        },
+        "rules": [
+          {
+            "id": "deny-large-refund",
+            "decision": "deny",
+            "target": null,
+            "conditions": [
+              {
+                "field": "amount_minor",
+                "op": "gt",
+                "value": 100000
+              }
+            ]
+          },
+          {
+            "id": "escalate-medium-refund",
+            "decision": "escalate",
+            "target": "member:REPLACE_WITH_REAL_MEMBER_ID",
+            "conditions": [
+              {
+                "field": "amount_minor",
+                "op": "gt",
+                "value": 50000
+              }
+            ]
+          },
+          {
+            "id": "confirm-refund",
+            "decision": "confirm",
+            "target": "agent_owner",
+            "conditions": [
+              {
+                "field": "amount_minor",
+                "op": "gt",
+                "value": 5000
+              }
+            ]
+          }
+        ]
+      },
+      "guards": {},
+      "executable_operations": []
+    }
+  ]
+}
+```
 
-The API condition forms are `{ "field": "amount_minor", "gt": 100000 }`,
-`{ "field": "amount_minor", "gt": 50000 }`, and
-`{ "field": "amount_minor", "gt": 5000 }`, respectively, each in a list.
-Set the policy's `escalation_targets["refund.create"]` to an opaque value such as
-`finance-review`. Leave unconditional confirmation/escalation/denial lists empty.
+Use the actual agent ID. Replace `member:REPLACE_WITH_REAL_MEMBER_ID` with a real workspace member reference before publishing; do not invent a team label or reviewer ID. Publication checks membership. The action decision and matching rules use fixed priority `deny > escalate > confirm > allow`, so the rules above deny more than $1,000, escalate more than $500, then confirm more than $50. A rule cannot weaken the action decision. At least one condition within each rule must match (OR). The action allows smaller refunds when no rule matches. Setup credentials configure and publish policies; runtime keys create grants and check them.
 
 For native identity, [enroll this agent with the CLI](../README.md#set-up-allowly-identity-for-agent-workflows)
 before creating the authorization. Use the exact agent ID from the policy, then
@@ -42,7 +96,7 @@ and select **Identity: Allowly Identity**. Keep the runtime API key in the same
 n8n credential. Do not put either secret in the workflow JSON or output.
 
 Using the **Create Authorization** operation in a separate setup workflow, create
-one authorization for the policy and an opaque test user ID. Store its returned
+one authorization for its exact logical policy ID and positive integer edition from `policy_ref`, with an opaque test user ID and optional names-only scope `["refund.create"]`. Store its returned
 `authorizationId`; the refund workflow reuses it. Do not create a new authorization
 for every refund. Setup credentials configure policies; runtime API keys perform
 checks. Follow the policy publication instructions when replacing a policy.
@@ -59,7 +113,7 @@ See [setup](https://allowly.ai/docs/api-reference/setup-and-tombstones/),
 
 ## 2. Prepare Stripe and import
 
-1. Install `n8n-nodes-allowly` **0.4.0** in n8n, then import the JSON file.
+1. Install `n8n-nodes-allowly` **0.5.0** in n8n, then import the JSON file.
 2. Create a succeeded USD PaymentIntent in Stripe's test mode or sandbox, with
    enough received funds for the scenario. Keep its `pi_...` ID. No payment is
    created by this workflow.

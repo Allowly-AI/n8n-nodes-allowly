@@ -5,6 +5,15 @@ const { readFileSync } = require('node:fs');
 const { createServer } = require('node:http');
 const { join } = require('node:path');
 const axios = require('axios');
+const { decodeReceipt } = require('../nodes/Allowly/seal-verifier.js');
+
+function changedReceipt(receipt, fields) {
+	return { ...receipt, payload: Buffer.from(JSON.stringify({ ...decodeReceipt(receipt), ...fields })).toString('base64url') };
+}
+
+function receiptFixture(fields) {
+	return changedReceipt(packagedSealVector('verification-v1.json').should_verify[0].receipt, fields);
+}
 const { AllowlyApi } = require('../dist/credentials/AllowlyApi.credentials.js');
 const { AllowlySealWebhookApi } = require('../dist/credentials/AllowlySealWebhookApi.credentials.js');
 const {
@@ -33,7 +42,7 @@ async function sealFixture() {
 	const verification = packagedSealVector('verification-v1.json');
 	const vector = verification.should_verify[0];
 	return {
-		digest: vector.receipt.context.record_sha256,
+		digest: decodeReceipt(vector.receipt).context.record_sha256,
 		keysDocument: verification.public_keys,
 		receipt: vector.receipt,
 		record: JSON.parse(vector.raw_json),
@@ -49,6 +58,20 @@ function packagedSealVector(relativePath) {
 
 test('vendored verifier and SEAL fixtures match recorded provenance', () => {
 	const provenance = require('../VERIFIER_PROVENANCE.json');
+	const lock = require('../package-lock.json').packages['node_modules/@allowly/verifier'];
+	assert.equal(provenance.source_version, '5.0.0');
+	assert.match(provenance.source_base_commit, /^[a-f0-9]{40}$/);
+	assert.equal(provenance.source_status, 'published_registry');
+	assert.equal(lock.version, provenance.source_version);
+	assert.notEqual(lock.link, true);
+	assert.equal(provenance.source_tarball, 'https://registry.npmjs.org/@allowly/verifier/-/verifier-5.0.0.tgz');
+	assert.equal(provenance.source_tarball, lock.resolved);
+	assert.match(provenance.source_integrity, /^sha512-/);
+	assert.equal(provenance.source_integrity, lock.integrity);
+	assert.equal(require('./fixtures/official-check-receipt.json').source_commit, provenance.source_base_commit);
+	for (const name of ['profile-v1.json', 'verification-v1.json']) {
+		assert.deepEqual(packagedSealVector(name), JSON.parse(readFileSync(require.resolve(`@allowly/verifier/vectors/seal/${name}`), 'utf8')));
+	}
 	const expected = {
 		[provenance.bundle.path]: provenance.bundle.sha256,
 		...provenance.fixtures,
@@ -127,6 +150,12 @@ test('context accepts a native object from an expression', () => {
 	assert.equal(parseContext(context, null, 0), context);
 });
 
+test('context preserves heterogeneous scalar lists from mapped objects and JSON text', () => {
+	const context = { items: [null, true, 0, 'x', true] };
+	assert.equal(parseContext(context, null, 0), context);
+	assert.deepEqual(parseContext(JSON.stringify(context), null, 0), context);
+});
+
 test('estimated cost removes floating-point dust', () => {
 	assert.equal(parseEstimatedCostMicros(2.01 * 1_000_000, null, 0), 2_010_000);
 });
@@ -162,6 +191,50 @@ function checkContext(parameters, response) {
 		},
 	};
 }
+
+test('Check normalizes pending/signed receipt routing without changing original envelopes or trusting their URL', async t => {
+	const oldUrl = process.env.ALLOWLY_N8N_API_BASE_URL;
+	t.after(() => { if (oldUrl === undefined) delete process.env.ALLOWLY_N8N_API_BASE_URL; else process.env.ALLOWLY_N8N_API_BASE_URL = oldUrl; });
+	process.env.ALLOWLY_N8N_API_BASE_URL = 'https://runtime.example.invalid/';
+	const vector = require('./fixtures/official-check-receipt.json');
+	const { loadKeysFromJson, verifyReceipt } = await import('@allowly/verifier');
+	const receipt = vector.receipt;
+	await verifyReceipt(receipt, loadKeysFromJson(vector.public_keys), { expectedWorkspaceId: vector.expected_workspace_id });
+	const receiptId = decodeReceipt(receipt).receipt_id;
+	const parameters = { operation: 'check', authorization: 'auth_unicode', actions: 'email.send', resource: '', session: '',
+		estimatedCostMicros: -1, workflowUser: '', workflowAgent: '', contextJson: {}, clientTimestamp: '' };
+	for (const envelope of [{ status: 'pending', receipt_id: receiptId, url: 'https://attacker.example/ignore' }, { status: 'signed', receipt }]) {
+		const context = checkContext(parameters, { results: { 'email.send': { decision: 'allow', reason: 'authorization_granted_action_active', receipt: envelope } } });
+		context.getCredentials = async () => ({ executionWorkspaceId: vector.expected_workspace_id });
+		const [[output]] = await new Allowly().execute.call(context);
+		assert.equal(output.json.receipt, envelope);
+		assert.equal(output.json.receiptId, receiptId);
+		assert.equal(output.json.receiptUrl, `https://runtime.example.invalid/v1/receipts/${receiptId}`);
+		assert.equal(output.json.workspaceId, vector.expected_workspace_id);
+		assert.equal(output.json.authorizationId, 'auth_unicode');
+		assert.equal(Object.hasOwn(output.json, 'signatureVerified'), false);
+	}
+	for (const envelope of [{ status: 'unknown', receipt_id: receiptId }, { status: 'pending', receipt_id: '../bad' },
+		{ status: 'signed', receipt: { receipt_id: receiptId, signature: 'old-flat' } }, { status: 'signed', receipt: { ...receipt, payload: '%' } }]) {
+		const context = checkContext(parameters, { results: { 'email.send': { decision: 'allow', receipt: envelope } } });
+		await assert.rejects(() => new Allowly().execute.call(context));
+	}
+	const context = checkContext(parameters, { results: { 'email.send': { decision: 'allow', reason: 'authorization_granted_action_active', receipt: { status: 'signed', receipt } } } });
+	context.getCredentials = async () => ({ executionWorkspaceId: 'ws_foreign' });
+	await assert.rejects(() => new Allowly().execute.call(context), /workspace does not match/);
+});
+
+test('Check rejects signed receipts for a crossed action, authorization, decision or reason', async () => {
+	const fixture = JSON.parse(readFileSync(join(__dirname, 'fixtures/workflow-receipts.json')));
+	const parameters = { operation: 'check', authorization: 'auth_parent', actions: 'refund.create', resource: '', session: '',
+		estimatedCostMicros: -1, workflowUser: '', workflowAgent: '', contextJson: {}, clientTimestamp: '' };
+	for (const name of ['cross_action', 'cross_authorization', 'cross_decision', 'cross_reason']) {
+		const context = checkContext(parameters, { results: { 'refund.create': { decision: 'allow', reason: 'authorization_granted_action_active',
+			receipt: { status: 'signed', receipt: fixture.receipts[name] } } } });
+		context.getCredentials = async () => ({ executionWorkspaceId: 'ws_test' });
+		await assert.rejects(() => new Allowly().execute.call(context), /does not match the checked action/);
+	}
+});
 
 test('check serializes an explicit zero-cost estimate', async () => {
 	const context = checkContext(
@@ -407,7 +480,7 @@ test('unknown operations never dispatch or continue on failure', async () => {
 });
 
 test('Acknowledge Receipt binds the exact hash, timestamp, and retry key', async () => {
-	const receipt = { receipt_id: 'rcp_123', issued_at: '2026-09-24T20:02:00Z', signature: 'signed' };
+	const receipt = receiptFixture({ receipt_id: 'rcp_123', issued_at: '2026-09-24T20:02:00.000Z' });
 	const hash = require('../dist/nodes/Allowly/seal-verifier.js').hashSealValue(receipt);
 	const context = receiptOperationContext({
 		operation: 'acknowledgeReceipt',
@@ -527,7 +600,7 @@ test('Seal hashes locally, polls until signed, and returns portable evidence', a
 					record_sha256: fixture.digest,
 					decision: 'allow',
 					reason: 'authorization_granted_action_active',
-					receipt: { status: 'pending', receipt_id: fixture.receipt.receipt_id },
+					receipt: { status: 'pending', receipt_id: decodeReceipt(fixture.receipt).receipt_id },
 				};
 			}
 			if (options.url.includes('/v1/receipts/')) {
@@ -600,7 +673,7 @@ test('Seal rejects a response without an authenticated workspace ID', async () =
 			record_sha256: fixture.digest,
 			decision: 'allow',
 			reason: 'authorization_granted_action_active',
-			receipt: { status: 'pending', receipt_id: fixture.receipt.receipt_id },
+			receipt: { status: 'pending', receipt_id: decodeReceipt(fixture.receipt).receipt_id },
 		}),
 	);
 
@@ -637,7 +710,7 @@ test('receipt polling ignores response URLs and uses the fixed Allowly origin', 
 	const context = sealContext('verifySeal', {}, (options) => {
 		calls += 1;
 		assert.equal(options.url, 'https://api.allowly.ai/v1/receipts/rcp%2Ftrusted');
-		return { status: 'signed', receipt: { receipt_id: 'rcp/trusted' } };
+		return { status: 'signed', receipt: receiptFixture({ receipt_id: 'rcp/trusted' }) };
 	});
 
 	const receipt = await waitForSignedSeal(
@@ -651,13 +724,13 @@ test('receipt polling ignores response URLs and uses the fixed Allowly origin', 
 		0,
 	);
 	assert.equal(calls, 1);
-	assert.equal(receipt.receipt_id, 'rcp/trusted');
+	assert.equal(decodeReceipt(receipt).receipt_id, 'rcp/trusted');
 });
 
 test('receipt polling rejects a changed receipt ID', async () => {
 	const context = sealContext('verifySeal', {}, () => ({
 		status: 'signed',
-		receipt: { receipt_id: 'rcp_other' },
+		receipt: receiptFixture({ receipt_id: 'rcp_other' }),
 	}));
 
 	await assert.rejects(
@@ -681,7 +754,7 @@ function fullHttpResponse(statusCode, body, headers = {}) {
 function webhookDelivery(fixture, overrides = {}) {
 	const attemptId = overrides.attempt_id ?? 'swd_test_attempt';
 	const receiptId = overrides.receipt_id === undefined
-		? fixture.receipt.receipt_id
+		? decodeReceipt(fixture.receipt).receipt_id
 		: overrides.receipt_id;
 	const response = {
 		attempt_id: attemptId,
@@ -703,7 +776,7 @@ function webhookDelivery(fixture, overrides = {}) {
 		...overrides,
 	};
 	if (!Object.hasOwn(overrides, 'metadata')) {
-		response.metadata = response.receipt?.context?.seal_metadata ?? null;
+		response.metadata = response.receipt ? decodeReceipt(response.receipt).context.seal_metadata ?? null : null;
 	}
 	return response;
 }
@@ -743,7 +816,7 @@ test('managed webhook is the v2 default while v1 keeps Check', () => {
 	const packageManifest = require('../package.json');
 	assert.deepEqual(description.version, [1, 2]);
 	assert.equal(description.defaultVersion, 2);
-	assert.deepEqual(Object.keys(new Allowly().methods.credentialTest), ['testSealWebhookCredential']);
+	assert.deepEqual(Object.keys(new Allowly().methods.credentialTest), ['testSealWebhookCredential', 'testApiCredential']);
 	assert.ok(packageManifest.n8n.nodes.includes('dist/nodes/Allowly/Allowly.node.js'));
 	assert.ok(
 		packageManifest.n8n.credentials.includes(
@@ -917,7 +990,7 @@ test('managed webhook sends exact raw JSON bytes and returns verified evidence w
 	assert.equal(output[0][0].json.signatureVerified, true);
 	assert.equal(output[0][0].json.recordMatches, true);
 	assert.equal(output[0][0].json.recordJson, rawJson);
-	assert.deepEqual(output[0][0].json.metadata, fixture.receipt.context.seal_metadata);
+	assert.deepEqual(output[0][0].json.metadata, decodeReceipt(fixture.receipt).context.seal_metadata);
 	assert.equal(Object.hasOwn(output[0][0].json.keysDocument, 'keys_url'), false);
 	assert.equal(JSON.stringify(output).includes(WEBHOOK_TOKEN), false);
 	assert.equal(JSON.stringify(output).includes('status_url'), false);
@@ -1225,6 +1298,8 @@ test('keeps the email pepper in credentials and pins requests to the Allowly API
 	const parameters = {
 		operation: 'createAuthorization',
 		policyId: 'policy_123',
+		policyVersion: 1,
+		authorizationActions: '',
 		userIdentifierMode: 'emailHmac',
 		userEmail: ' Alice@Example.COM ',
 	};
@@ -1244,7 +1319,7 @@ test('keeps the email pepper in credentials and pins requests to the Allowly API
 		helpers: {
 			httpRequestWithAuthentication: async (_credentials, options) => {
 				requests.push(options);
-				return { authorization_id: 'auth_123' };
+				return { authorization_id: 'auth_123', policy_ref: { policy_id: 'policy_123', policy_version: 1, definition_sha256: 'a'.repeat(64) }, actions: ['email.send'] };
 			},
 		},
 	};
@@ -1252,7 +1327,8 @@ test('keeps the email pepper in credentials and pins requests to the Allowly API
 	const output = await new Allowly().execute.call(context);
 	const expectedUserId = 'email_hmac:v1:3ICm-xnjBrsMfGEj1mG6hCoepxjL2ZRlvmWNig2XUk0';
 	assert.equal(requests[0].url, 'https://api.allowly.ai/v1/authorizations');
-	assert.equal(requests[0].body.user_id, expectedUserId);
+	assert.deepEqual(requests[0].body, { user_id: expectedUserId, policy_id: 'policy_123', policy_version: 1 });
+	assert.deepEqual(output[0][0].json.policyRef, { policy_id: 'policy_123', policy_version: 1, definition_sha256: 'a'.repeat(64) });
 	assert.equal(output[0][0].json.userId, expectedUserId);
 });
 
@@ -1281,6 +1357,50 @@ test('budget settlement passes through the response and defaults the idempotency
 		['execution-42:rcp_check_123', 'execution-42:rcp_check_456'],
 	);
 });
+
+test('authorization requires an exact policy edition and names-only optional scope', async () => {
+	const parameters = { policyId: 'policy_123', policyVersion: 2, authorizationActions: '["email.send"]', userIdentifierMode: 'opaque', userId: 'user_123' };
+	const response = { authorization_id: 'auth_123', policy_ref: { policy_id: 'policy_123', policy_version: 2, definition_sha256: 'a'.repeat(64) }, actions: ['email.send'] };
+	const context = resolutionContext('createAuthorization', parameters, response);
+	const output = await new Allowly().execute.call(context);
+	assert.deepEqual(context.requests[0].body, { user_id: 'user_123', policy_id: 'policy_123', policy_version: 2, actions: ['email.send'] });
+	assert.deepEqual(output[0][0].json.policyRef, response.policy_ref);
+	assert.deepEqual(output[0][0].json.actions, ['email.send']);
+	assert.equal(output[0][0].json.policyVersion, 2);
+});
+
+for (const version of [undefined, true, '1', 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+	test(`authorization rejects invalid policy version ${String(version)} before HTTP`, async () => {
+		const context = resolutionContext('createAuthorization', { policyId: 'policy_123', policyVersion: version, authorizationActions: '', userIdentifierMode: 'opaque', userId: 'user_123' }, {});
+		await assert.rejects(new Allowly().execute.call(context), /Policy Version/);
+		assert.equal(context.requests.length, 0);
+	});
+}
+
+for (const scope of ['[]', '["email.send","email.send"]', '[{"name":"email.send","constraints":{}}]', '[true]', '["email.send",]']) {
+	test(`authorization rejects invalid names-only scope ${scope} before HTTP`, async () => {
+		const context = resolutionContext('createAuthorization', { policyId: 'policy_123', policyVersion: 1, authorizationActions: scope, userIdentifierMode: 'opaque', userId: 'user_123' }, {});
+		await assert.rejects(new Allowly().execute.call(context));
+		assert.equal(context.requests.length, 0);
+	});
+}
+
+for (const patch of [
+	{ policy_ref: null },
+	{ policy_ref: { policy_id: 'other_policy', policy_version: 1, definition_sha256: 'a'.repeat(64) } },
+	{ policy_ref: { policy_id: 'policy_123', policy_version: '1', definition_sha256: 'a'.repeat(64) } },
+	{ policy_ref: { policy_id: 'policy_123', policy_version: 1, definition_sha256: 'A'.repeat(64) } },
+	{ policy_ref: { policy_id: 'policy_123', policy_version: 1, definition_sha256: 'a'.repeat(64), extra: true } },
+	{ actions: [{ name: 'email.send' }] },
+	{ actions: ['email.read'] },
+]) {
+	test(`authorization rejects wrong retained response ${JSON.stringify(patch)}`, async () => {
+		const context = resolutionContext('createAuthorization', { policyId: 'policy_123', policyVersion: 1, authorizationActions: '["email.send"]', userIdentifierMode: 'opaque', userId: 'user_123' }, {
+			authorization_id: 'auth_123', policy_ref: { policy_id: 'policy_123', policy_version: 1, definition_sha256: 'a'.repeat(64) }, actions: ['email.send'], ...patch,
+		});
+		await assert.rejects(new Allowly().execute.call(context));
+	});
+}
 
 function resolutionContext(operation, parameters, response) {
 	const requests = [];
@@ -1356,3 +1476,21 @@ for (const code of [
 		);
 	});
 }
+
+test("published SEAL verifier rejects a validly signed wire4 receipt", async () => {
+  const verifier = require("../nodes/Allowly/seal-verifier");
+  const fixture = JSON.parse(require("node:fs").readFileSync(require("node:path").join(__dirname, "fixtures/seal/verification-v1.json"), "utf8"));
+  const vector = fixture.should_verify[0];
+  const keys = verifier.loadKeysFromJson(fixture.public_keys);
+  const crypto = require("node:crypto");
+  const { canonicalize } = await import('@allowly/verifier');
+  const privateKey = crypto.createPrivateKey({ key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), Buffer.alloc(32)]), format: "der", type: "pkcs8" });
+  const payload = { ...verifier.decodeReceipt(vector.receipt), schema_version: "4", alg: "Ed25519", key_id: "test-key/v1" };
+  delete payload.signature;
+  const signature = crypto.sign(null, canonicalize(payload), privateKey);
+  assert.equal(crypto.verify(null, canonicalize(payload), crypto.createPublicKey(privateKey), signature), true);
+  const result = await verifier.verifySealJson(vector.raw_json, { ...payload, signature: signature.toString("base64url") }, keys, { expectedWorkspaceId: fixture.expected_workspace_id });
+  assert.equal(result.signatureVerified, false);
+  assert.equal(result.recordMatches, false);
+  assert.equal(result.failureReason, "receipt_verification_failed");
+});

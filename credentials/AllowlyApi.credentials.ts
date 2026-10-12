@@ -1,4 +1,4 @@
-import type { ICredentialTestRequest, ICredentialType, INodeProperties } from 'n8n-workflow';
+import type { ICredentialType, INodeProperties } from 'n8n-workflow';
 
 export class AllowlyApi implements ICredentialType {
 	name = 'allowlyApi';
@@ -18,14 +18,22 @@ export class AllowlyApi implements ICredentialType {
 		},
 	};
 
-	test: ICredentialTestRequest = {
-		request: {
-			method: 'GET' as const,
-			url: 'https://api.allowly.ai/v1/authorizations?limit=1',
-		},
-	};
-
 	properties: INodeProperties[] = [
+		{
+			displayName: 'Execution Workspace ID',
+			name: 'executionWorkspaceId',
+			type: 'string',
+			default: '',
+			description: 'Trusted workspace ID for Execute and resolution callbacks. Copy it from your workspace, not from a callback.',
+		},
+		{
+			displayName: 'Resolution Webhook Signing Secret',
+			name: 'resolutionWebhookSigningSecret',
+			type: 'string',
+			typeOptions: { password: true },
+			default: '',
+			description: 'Private whsec_ secret for the fixed workspace resolution callback. Notifications only wake saved operations.',
+		},
 		{
 			displayName: 'API Key',
 			name: 'apiKey',

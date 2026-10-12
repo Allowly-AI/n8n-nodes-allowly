@@ -22,15 +22,17 @@ The workflow uses the verified `n8n-nodes-allowly.allowly` node at its current d
 
 ## Before you import
 
+Set **Execution Workspace ID** in the Allowly credential from trusted workspace settings, not a receipt. Install the same Allowly package on the Code runtime or task runner and allow it with `NODE_FUNCTION_ALLOW_EXTERNAL=n8n-nodes-allowly` (retain needed entries, never `*`). The decision validator uses the maintained decoder, accepts pending or signed wire-5 envelopes, and stops if the decoder is unavailable or the signed workspace differs. The original JWS stays in the output. Decoding alone does not verify a signature or prove that Zoho Mail ran.
+
 Use a test n8n project and a Zoho Mail account reserved for testing. The supplied addresses use reserved `.example` and `.invalid` domains. Do not replace them with customer data or a real outside recipient for the crash test.
 
 Install the current package release:
 
 ```text
-n8n-nodes-allowly@0.4.0
+n8n-nodes-allowly-0.5.0.tgz (local unpublished build)
 ```
 
-Version **0.4.0** supports native **Allowly Identity**, Auth0, and unbound
+Version **0.5.0** supports native **Allowly Identity**, Auth0, and unbound
 authorizations through the **Identity** selector.
 
 Apply the bundled action and policy from a signed-in Allowly CLI:

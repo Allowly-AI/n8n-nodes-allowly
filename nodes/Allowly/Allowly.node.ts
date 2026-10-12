@@ -1,4 +1,10 @@
 import { createHash, createHmac } from 'crypto';
+// Durable Execute is self-hosted only. These imports validate operator-owned storage, never workflow-selected paths.
+// eslint-disable-next-line @n8n/community-nodes/no-restricted-imports
+import { lstat, realpath } from 'node:fs/promises';
+// eslint-disable-next-line @n8n/community-nodes/no-restricted-imports
+import { isAbsolute, join, resolve } from 'node:path';
+import * as executionSdk from './execution-sdk.js';
 import type {
 	ICredentialDataDecryptedObject,
 	ICredentialsDecrypted,
@@ -29,6 +35,8 @@ type AllowlyCheckResponse = {
 
 type AllowlyAuthorizationResponse = {
 	authorization_id?: string;
+	policy_ref?: unknown;
+	actions?: unknown;
 	receipt?: unknown;
 	[key: string]: unknown;
 };
@@ -114,9 +122,132 @@ const IDENTITY_OPERATION_NAMES = new Set([
 	'check',
 	'checkAndEnforce',
 	'acknowledgeReceipt',
+	'executeHttp',
+	'continueHttpExecution',
+	'getExecution',
+	'reconcileHttpExecution',
 ]);
 
+const EXECUTION_OPERATION_NAMES = ['executeHttp', 'continueHttpExecution', 'getExecution', 'reconcileHttpExecution'];
+type ExecutionSdk = typeof executionSdk;
+type HttpOptions = Parameters<InstanceType<ExecutionSdk['Allowly']>['executeHttp']>[1];
+
+/** Operator-owned durable storage only. Workflow expressions cannot select a journal path. */
+async function executionStorage(workspaceId: string): Promise<{ journalDirectory: string; evidenceRoot: string }> {
+	// eslint-disable-next-line @n8n/community-nodes/no-restricted-globals -- self-hosted operator config, not a node parameter
+	const root = process.env.ALLOWLY_N8N_STATE_DIRECTORY;
+	if (!root || !isAbsolute(root) || root !== resolve(root)) {
+		throw new ApplicationError('Set ALLOWLY_N8N_STATE_DIRECTORY to a private absolute durable directory on this self-hosted worker.');
+	}
+	const info = await lstat(root);
+	// eslint-disable-next-line @n8n/community-nodes/no-restricted-globals -- ownership check for private self-hosted journal root
+	const ownerMatches = !process.getuid || info.uid === process.getuid();
+	if (!info.isDirectory() || info.isSymbolicLink() || (info.mode & 0o077) !== 0
+		|| !ownerMatches || await realpath(root) !== root) {
+		throw new ApplicationError('Execute storage must be a private owned directory without symlink components.');
+	}
+	const workspace = createHash('sha256').update(workspaceId).digest('hex');
+	return { journalDirectory: join(root, `journal-${workspace}`), evidenceRoot: root };
+}
+
+function executionWorkspace(credentials: ICredentialDataDecryptedObject): string {
+	const id = credentials.executionWorkspaceId;
+	if (typeof id !== 'string' || !id || id !== id.trim() || id.length > 128 || /[\r\n]/.test(id)) {
+		throw new ApplicationError('Execution Workspace ID must come from trusted credential configuration.');
+	}
+	return id;
+}
+
+function executionRequest(value: unknown): { url: string; options: Omit<HttpOptions, 'journalDirectory'> } {
+	let raw: unknown = value;
+	if (typeof value === 'string') {
+		sealVerifier.hashSealJson(value);
+		raw = JSON.parse(value);
+	} else sealVerifier.hashSealValue(value);
+	if (!isRecord(raw)) throw new ApplicationError('Original Execution Request must be an object.');
+	const fields = ['url', 'operationId', 'authorizationId', 'enabledExecutableId', 'catalogOperationId', 'action',
+		'evidenceMode', 'method', 'headers', 'body', 'policyInput', 'timeoutMs'];
+	if (Object.keys(raw).some((key) => !fields.includes(key))) {
+		throw new ApplicationError('Original Execution Request contains unsupported fields. Journal, witness paths and identity are operator-owned.');
+	}
+	for (const name of fields.slice(0, 6)) {
+		if (typeof raw[name] !== 'string' || !raw[name] || raw[name] !== (raw[name] as string).trim()) {
+			throw new ApplicationError(`Original Execution Request requires ${name}.`);
+		}
+	}
+	if (raw.evidenceMode !== undefined && raw.evidenceMode !== 'receipt' && raw.evidenceMode !== 'witnessed') {
+		throw new ApplicationError('Execution evidenceMode must be receipt or witnessed.');
+	}
+	if (raw.policyInput !== undefined && (!isRecord(raw.policyInput)
+		|| Object.keys(raw.policyInput).some((key) => !['resource', 'context', 'estimatedCostMicros'].includes(key)))) {
+		throw new ApplicationError('Execution policyInput must contain only resource, context and estimatedCostMicros.');
+	}
+	const { url, ...options } = raw;
+	return { url: url as string, options: options as Omit<HttpOptions, 'journalDirectory'> };
+}
+
+function executionScope(sdk: ExecutionSdk, response: Awaited<ReturnType<InstanceType<ExecutionSdk['Allowly']>['getExecution']>>,
+	request: ReturnType<typeof executionRequest>): void {
+	const expected = { ...sdk.commitCustomerHttpRequest(request.url, request.options),
+		operationId: request.options.operationId, authorizationId: request.options.authorizationId,
+		destinationId: request.options.enabledExecutableId, action: request.options.action };
+	if (response.operationId !== request.options.operationId || response.action !== request.options.action
+		|| response.destinationId !== request.options.enabledExecutableId
+		|| sdk.hashSealValue(response.requestDescriptor) !== sdk.hashSealValue(expected)) {
+		throw new ApplicationError('Execution status does not match the unchanged original request.');
+	}
+}
+
+function executionOutput(result: Awaited<ReturnType<InstanceType<ExecutionSdk['Allowly']>['executeHttp']>>): IDataObject {
+	// Provider bytes are not emitted into saved workflow output. Evidence retains SDK file references.
+	const safe = { ...result };
+	if ('providerResponse' in safe) delete (safe as { providerResponse?: unknown }).providerResponse;
+	return JSON.parse(JSON.stringify({ ...safe, protectedActionAllowed: false, notificationOnly: false })) as IDataObject;
+}
+
+async function rejectedExecutionOutput(client: InstanceType<ExecutionSdk['Allowly']>,
+	request: ReturnType<typeof executionRequest>, error: unknown): Promise<IDataObject> {
+	// Continue has already checked the SDK journal's complete original request. A conflict alone is not a rejection.
+	if (!(error instanceof executionSdk.AllowlyAPIError) || error.status !== 409 || error.code !== 'execution_review_not_available') throw error;
+	const execution = await client.getExecution(request.options.operationId);
+	executionScope(executionSdk, execution, request);
+	const review = execution.review;
+	const sourceId = execution.decisionReceipt.status === 'pending' ? execution.decisionReceipt.receiptId
+		: sealVerifier.decodeReceipt(execution.decisionReceipt.receipt).receipt_id;
+	if (execution.status !== 'waiting_for_review' || !review || review.kind !== execution.decision
+		|| review.sourceReceiptId !== sourceId || execution.targetState !== 'not_started'
+		|| execution.decisionState !== 'not_allowed' || execution.approval !== null || execution.downstream !== null) throw error;
+	const resolution = review.kind === 'confirm' ? await client.confirmations.getStatus(review.id)
+		: await client.escalations.getStatus(review.id);
+	if (resolution.status !== 'rejected') throw error;
+	if (resolution.authorizationId !== request.options.authorizationId || resolution.action !== request.options.action
+		|| resolution.resource !== (request.options.policyInput?.resource ?? null)
+		|| resolution.sourceReceiptId !== review.sourceReceiptId || resolution.expiresAt !== review.expiresAt
+		|| !resolution.resolvedAt || !resolution.resolutionReceiptId || resolution.authorityStatus !== 'none') {
+		throw new ApplicationError('Execution review status lacks a bound recorded rejection.');
+	}
+	// Node-level terminal choice only. Retain the original execution and signed receipt links; no new execution outcome.
+	return JSON.parse(JSON.stringify({ state: 'denied', decision: 'deny', reason: 'review_rejected',
+		authorization: execution, review, resolution, protectedActionAllowed: false, notificationOnly: false })) as IDataObject;
+}
+
 const API_URL = 'https://api.allowly.ai';
+
+/** Server environment only; credentials, expressions and workflow input cannot select an API host. */
+export function apiBaseUrl(): string {
+	// eslint-disable-next-line @n8n/community-nodes/no-restricted-globals -- fixed operator configuration
+	const value = process.env.ALLOWLY_N8N_API_BASE_URL ?? API_URL;
+	// eslint-disable-next-line @n8n/community-nodes/no-restricted-globals -- explicit local fixture opt-in
+	const local = process.env.ALLOWLY_N8N_ALLOW_LOCAL_API === 'true';
+	if (!URL.canParse(value)) throw new ApplicationError('Operator API endpoint must be an HTTP(S) origin.');
+	const url = new URL(value);
+	const loopback = ['localhost', '127.0.0.1', '[::1]', 'host.docker.internal'].includes(url.hostname);
+	if ((value !== url.origin && value !== url.origin + '/') || url.username || url.password || url.search || url.hash || url.pathname !== '/'
+		|| (url.protocol !== 'https:' && !(local && loopback && url.protocol === 'http:'))) {
+		throw new ApplicationError('Operator API endpoint must be an HTTPS origin, or an explicitly enabled local HTTP origin.');
+	}
+	return url.origin;
+}
 
 const SEAL_WEBHOOK_PATH = '/v1/seal/webhooks';
 
@@ -137,6 +268,11 @@ const SEAL_WEBHOOK_DETAIL_PARAMETERS = [
 ] as const;
 
 const LEGACY_OPERATION_OPTIONS: INodePropertyOptions[] = [
+	{ name: 'Execute HTTP', value: 'executeHttp', description: 'Self-hosted only: SDK Execute with a stable operation and private durable journal', action: 'Execute a saved HTTP request' },
+	{ name: 'Continue HTTP Execution', value: 'continueHttpExecution', description: 'Self-hosted only: continue the exact saved request after authoritative review', action: 'Continue a saved HTTP execution' },
+	{ name: 'Get Bound Execution Status', value: 'getExecution', description: 'Read authenticated status and compare it to the unchanged original request', action: 'Get bound execution status' },
+	{ name: 'Reconcile HTTP Execution', value: 'reconcileHttpExecution', description: 'Recover the SDK journal without resending an ambiguous provider request', action: 'Reconcile an HTTP execution' },
+	{ name: 'Verify Resolution Webhook', value: 'verifyResolutionWebhook', description: 'Authenticate original bounded callback bytes; notification only, never permission', action: 'Verify a resolution webhook' },
 	{
 		name: 'Check',
 		value: 'check',
@@ -219,6 +355,29 @@ const SUPPORTED_OPERATIONS = new Set(MANAGED_OPERATION_OPTIONS.map((option) => o
 
 const MAX_SAFE_INTEGER = 2 ** 53 - 1;
 
+function authorizationActions(value: unknown): string[] {
+	sealVerifier.hashSealValue(value);
+	if (!Array.isArray(value) || value.length < 1 || value.length > 32
+		|| value.some((name) => typeof name !== 'string' || [...name].length < 1 || [...name].length > 64)
+		|| new Set(value).size !== value.length) {
+		throw new ApplicationError('Authorization action scope must be 1–32 unique action names, not inline rule objects.');
+	}
+	return value as string[];
+}
+
+function authorizationPolicyReference(value: unknown, policyId: string, policyVersion: number): Record<string, unknown> {
+	sealVerifier.hashSealValue(value);
+	if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ApplicationError('Invalid authorization policy_ref.');
+	const ref = value as Record<string, unknown>;
+	if (Object.keys(ref).sort().join(',') !== 'definition_sha256,policy_id,policy_version'
+		|| ref.policy_id !== policyId || ref.policy_version !== policyVersion
+		|| typeof ref.policy_version !== 'number' || !Number.isSafeInteger(ref.policy_version) || ref.policy_version < 1
+		|| typeof ref.definition_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(ref.definition_sha256)) {
+		throw new ApplicationError('Authorization policy_ref does not match the requested policy edition.');
+	}
+	return ref;
+}
+
 function recordInput(
 	executeFunctions: IExecuteFunctions,
 	itemIndex: number,
@@ -294,8 +453,10 @@ export async function waitForSignedSeal(
 			'allowlyApi',
 			{
 				method: 'GET',
-				url: `${API_URL}/v1/receipts/${encodeURIComponent(expectedReceiptId)}`,
+				url: `${apiBaseUrl()}/v1/receipts/${encodeURIComponent(expectedReceiptId)}`,
 				json: true,
+				disableFollowRedirect: true,
+				sendCredentialsOnCrossOriginRedirect: false,
 			},
 		)) as AllowlyReceiptEnvelope;
 		if (current.status === 'pending' && pollDelayMs > 0) {
@@ -310,10 +471,11 @@ export async function waitForSignedSeal(
 			{ itemIndex },
 		);
 	}
+	const claims = sealVerifier.decodeReceipt(receipt);
 	if (
-		typeof receipt.receipt_id !== 'string' ||
-		!receipt.receipt_id ||
-		(expectedReceiptId !== null && receipt.receipt_id !== expectedReceiptId)
+		typeof claims.receipt_id !== 'string' ||
+		!claims.receipt_id ||
+		(expectedReceiptId !== null && claims.receipt_id !== expectedReceiptId)
 	) {
 		throw new NodeOperationError(
 			executeFunctions.getNode(),
@@ -334,8 +496,10 @@ async function authenticatedWorkspaceKeys(
 		'allowlyApi',
 		{
 			method: 'GET',
-			url: `${API_URL}/v1/workspaces/${encodeURIComponent(expectedWorkspaceId)}/keys`,
+			url: `${apiBaseUrl()}/v1/workspaces/${encodeURIComponent(expectedWorkspaceId)}/keys`,
 			json: true,
+			disableFollowRedirect: true,
+			sendCredentialsOnCrossOriginRedirect: false,
 		},
 	);
 	return trustedKeysFromDocument(
@@ -1068,9 +1232,10 @@ function parseSealWebhookDelivery(
 			{ itemIndex },
 		);
 	}
+	const claims = receipt === null ? null : sealVerifier.decodeReceipt(receipt);
 	if (
-		receipt !== null &&
-		(receiptId === null || receipt.receipt_id !== receiptId || receipt.workspace_id !== workspaceId)
+		claims !== null &&
+		(receiptId === null || claims.receipt_id !== receiptId || claims.workspace_id !== workspaceId)
 	) {
 		throw new NodeOperationError(
 			executeFunctions.getNode(),
@@ -1079,7 +1244,7 @@ function parseSealWebhookDelivery(
 		);
 	}
 	if (receipt !== null) {
-		const context = isRecord(receipt.context) ? receipt.context : {};
+		const context = isRecord(claims?.context) ? claims.context : {};
 		const signedMetadata = sealWebhookMetadata(
 			context.seal_metadata,
 			executeFunctions,
@@ -1318,7 +1483,7 @@ async function sealWebhookEvidence(
 			{ itemIndex },
 		);
 	}
-	if (typeof receipt.issued_at !== 'string' || !receipt.issued_at) {
+	if (typeof sealVerifier.decodeReceipt(receipt).issued_at !== 'string' || !sealVerifier.decodeReceipt(receipt).issued_at) {
 		throw new NodeOperationError(
 			executeFunctions.getNode(),
 			'Allowly returned a signed receipt without its recorded time.',
@@ -1331,7 +1496,7 @@ async function sealWebhookEvidence(
 		pending: false,
 		signatureVerified: true,
 		recordMatches: true,
-		recordedAt: receipt.issued_at,
+		recordedAt: sealVerifier.decodeReceipt(receipt).issued_at,
 		receipt,
 		keysDocument: trustedKeys.document,
 		trustedKeyFingerprints: trustedKeys.fingerprints,
@@ -1400,10 +1565,31 @@ export async function testSealWebhookCredential(
 	};
 }
 
+export async function testApiCredential(
+	this: ICredentialTestFunctions,
+	credential: ICredentialsDecrypted<ICredentialDataDecryptedObject>,
+): Promise<INodeCredentialTestResult> {
+	try {
+		const baseUrl = apiBaseUrl();
+		if (typeof credential.data?.apiKey !== 'string' || !credential.data.apiKey) {
+			return { status: 'Error', message: 'Allowly API key is required.' };
+		}
+		const request = Reflect.get(this.helpers, 'request') as ICredentialTestFunctions['helpers']['request'];
+		const response = await request({ method: 'GET', uri: `${baseUrl}/v1/authorizations?limit=1`,
+			headers: { Authorization: `Bearer ${credential.data.apiKey}` }, followRedirect: false,
+			json: true, resolveWithFullResponse: true, simple: false, timeout: 15_000 });
+		if (isRecord(response) && Number(response.statusCode) === 200) {
+			return { status: 'OK', message: 'Allowly API credential is valid.' };
+		}
+	} catch { /* Never expose endpoint or credential-bearing transport errors. */ }
+	return { status: 'Error', message: 'Allowly API credential check failed. Check the API key and operator endpoint.' };
+}
+
 export class Allowly implements INodeType {
 	methods = {
 		credentialTest: {
 			testSealWebhookCredential,
+			testApiCredential,
 		},
 	};
 
@@ -1434,6 +1620,8 @@ export class Allowly implements INodeType {
 							'check',
 							'checkAndEnforce',
 							'acknowledgeReceipt',
+							...EXECUTION_OPERATION_NAMES,
+							'verifyResolutionWebhook',
 							'createAuthorization',
 							'resolveConfirmation',
 							'resolveEscalation',
@@ -1448,12 +1636,28 @@ export class Allowly implements INodeType {
 			{
 				name: 'allowlyApi',
 				required: true,
+				testedBy: 'testApiCredential',
 				displayOptions: {
 					hide: { operation: ['sealWebhook', 'retrieveWebhookSeal', 'verifySealEvidence'] },
 				},
 			},
 		],
 		properties: [
+			{
+				displayName: 'Original Execution Request', name: 'executionRequest', type: 'json', default: '', required: true,
+				description: 'Immutable customer-held request with URL, operationId, authorizationId, enabledExecutableId, catalogOperationId and action. Reuse unchanged after Wait; never use the n8n execution ID as a new operation.',
+				displayOptions: { show: { operation: EXECUTION_OPERATION_NAMES } },
+			},
+			{
+				displayName: 'Raw Body Binary Field', name: 'resolutionRawBodyField', type: 'string', default: 'data', required: true,
+				description: 'Binary field from a Webhook node with Raw Body enabled. Parsed JSON or reserialized text is not accepted.',
+				displayOptions: { show: { operation: ['verifyResolutionWebhook'] } },
+			},
+			{
+				displayName: 'Webhook Headers', name: 'resolutionWebhookHeaders', type: 'json', default: '={{ $json.headers }}', required: true,
+				description: 'Original Standard Webhook headers from the fixed callback endpoint',
+				displayOptions: { show: { operation: ['verifyResolutionWebhook'] } },
+			},
 			{
 				displayName: 'Operation',
 				name: 'operation',
@@ -1648,12 +1852,30 @@ export class Allowly implements INodeType {
 				type: 'string',
 				default: '',
 				required: true,
-				description: 'Allowly agent policy ID to authorize for this user',
+				description: 'Logical Allowly policy ID to authorize for this user',
 				displayOptions: {
 					show: {
 						operation: ['createAuthorization'],
 					},
 				},
+			},
+			{
+				displayName: 'Policy Version',
+				name: 'policyVersion',
+				type: 'number',
+				typeOptions: { minValue: 1, numberPrecision: 0 },
+				default: 0,
+				required: true,
+				description: 'Exact positive integer policy edition copied from its published policy_ref',
+				displayOptions: { show: { operation: ['createAuthorization'] } },
+			},
+			{
+				displayName: 'Action Scope (JSON)',
+				name: 'authorizationActions',
+				type: 'string',
+				default: '',
+				description: 'Optional JSON array of unique action names. Leave blank for all actions in the retained edition. Inline rules are not accepted.',
+				displayOptions: { show: { operation: ['createAuthorization'] } },
 			},
 			{
 				displayName: 'User Identifier',
@@ -2117,7 +2339,7 @@ export class Allowly implements INodeType {
 							recordMatches: true,
 							failureReason: null,
 							expectedWorkspaceId,
-							recordedAt: receipt.issued_at,
+							recordedAt: sealVerifier.decodeReceipt(receipt).issued_at,
 							receipt,
 							keysDocument: trustedKeys.document,
 							trustedKeyFingerprints: trustedKeys.fingerprints,
@@ -2128,7 +2350,7 @@ export class Allowly implements INodeType {
 				}
 
 				const credentials = await this.getCredentials('allowlyApi', itemIndex);
-				sensitiveValues = [credentials.apiKey, credentials.auth0ClientSecret,
+				sensitiveValues = [credentials.apiKey, credentials.auth0ClientSecret, credentials.resolutionWebhookSigningSecret,
 					...nativeCredentialSecrets(credentials.nativeAgentCredential)]
 					.filter((value): value is string => typeof value === 'string' && value.length > 0);
 				let identityToken: string | undefined;
@@ -2147,6 +2369,70 @@ export class Allowly implements INodeType {
 					? { 'X-Allowly-Agent-Token': identityToken }
 					: {};
 
+				if (operation === 'verifyResolutionWebhook') {
+					const sdk = executionSdk;
+					const workspaceId = executionWorkspace(credentials);
+					const field = this.getNodeParameter('resolutionRawBodyField', itemIndex) as string;
+					const binary = items[itemIndex].binary?.[field];
+					if (!binary || typeof binary.data !== 'string' || binary.data.length > 24 * 1024
+						|| (binary.fileSize && Number(binary.fileSize) > 16 * 1024)) {
+						throw new ApplicationError('Resolution callback requires original raw binary bytes of at most 16 KiB.');
+					}
+					const bytes = await this.helpers.getBinaryDataBuffer(itemIndex, field);
+					const headers = parseJsonObject(this.getNodeParameter('resolutionWebhookHeaders', itemIndex), 'Webhook Headers', this, itemIndex);
+					const event = sdk.verifyResolutionWebhook(bytes, headers as Record<string, string>, {
+						expectedWorkspaceId: workspaceId,
+						signingSecret: credentials.resolutionWebhookSigningSecret as string,
+					});
+					returnData.push({ json: { event, notificationOnly: true, protectedActionAllowed: false } as unknown as IDataObject, pairedItem: { item: itemIndex } });
+					continue;
+				}
+
+				if (EXECUTION_OPERATION_NAMES.includes(operation)) {
+					const sdk = executionSdk;
+					const workspaceId = executionWorkspace(credentials);
+					const request = executionRequest(this.getNodeParameter('executionRequest', itemIndex));
+					sensitiveValues.push(...[...Object.values(request.options.headers ?? {}), request.options.body ?? '']
+						.filter((value) => typeof value === 'string' && value.length > 0));
+					const storage = await executionStorage(workspaceId);
+					const baseUrl = apiBaseUrl();
+					const agentTokenSupplier = identityToken === undefined ? undefined : async () => {
+						const refreshed = await identityTokenForCredentials(this, itemIndex, credentials, identityTokenCache);
+						identityTokenCache = refreshed.cache;
+						if (!refreshed.token) throw new ApplicationError('Configured execution identity is unavailable.');
+						sensitiveValues.push(refreshed.token);
+						return refreshed.token;
+					};
+					const client = new sdk.Allowly({ apiKey: credentials.apiKey as string, agentTokenSupplier,
+						baseUrl, dangerouslyAllowInsecureBaseUrl: baseUrl.startsWith('http:') });
+					const options: HttpOptions = { ...request.options, journalDirectory: storage.journalDirectory,
+						// Installed native witness configuration remains the SDK's authority.
+						witness: { evidenceDirectory: join(storage.evidenceRoot, `witness-${createHash('sha256').update(`${workspaceId}:${request.options.operationId}`).digest('hex')}`), workspaceId } };
+					if (operation === 'getExecution' || operation === 'reconcileHttpExecution') {
+						const status = await client.getExecution(options.operationId);
+						executionScope(sdk, status, request);
+						if (operation === 'getExecution') {
+							returnData.push({ json: { execution: status, notificationOnly: false, protectedActionAllowed: false } as unknown as IDataObject, pairedItem: { item: itemIndex } });
+							continue;
+						}
+					}
+					let output: IDataObject;
+					try {
+						const result = operation === 'reconcileHttpExecution'
+							? await client.resumeHttpExecution({ operationId: options.operationId, journalDirectory: storage.journalDirectory })
+							: operation === 'continueHttpExecution'
+								? await client.continueHttpExecution(request.url, options)
+								: await client.executeHttp(request.url, options);
+						output = executionOutput(result);
+					} catch (error) {
+						// eslint-disable-next-line @n8n/community-nodes/require-node-api-error -- outer item guard sanitizes and wraps all errors
+						if (operation !== 'continueHttpExecution') throw error;
+						output = await rejectedExecutionOutput(client, request, error);
+					}
+					returnData.push({ json: output, pairedItem: { item: itemIndex } });
+					continue;
+				}
+
 				if (operation === 'acknowledgeReceipt') {
 					const receiptInput = parseJsonObject(
 						this.getNodeParameter('ackReceipt', itemIndex),
@@ -2157,7 +2443,8 @@ export class Allowly implements INodeType {
 					const receipt = receiptInput.status === 'signed' && isRecord(receiptInput.receipt)
 						? receiptInput.receipt
 						: receiptInput;
-					const receiptId = typeof receipt.receipt_id === 'string' ? receipt.receipt_id.trim() : '';
+					const claims = sealVerifier.decodeReceipt(receipt);
+					const receiptId = typeof claims.receipt_id === 'string' ? claims.receipt_id.trim() : '';
 					let receiptSha256: string;
 					try {
 						receiptSha256 = sealVerifier.hashSealValue(receipt);
@@ -2192,7 +2479,7 @@ export class Allowly implements INodeType {
 						'allowlyApi',
 						{
 							method: 'POST',
-							url: `${API_URL}/v1/receipts/${encodeURIComponent(receiptId)}/acknowledgments`,
+							url: `${apiBaseUrl()}/v1/receipts/${encodeURIComponent(receiptId)}/acknowledgments`,
 							headers: {
 								'Content-Type': 'application/json',
 								'Idempotency-Key': requestKey,
@@ -2233,10 +2520,12 @@ export class Allowly implements INodeType {
 						'allowlyApi',
 						{
 							method: 'POST',
-							url: `${API_URL}/v1/seal`,
+							url: `${apiBaseUrl()}/v1/seal`,
 							headers: { 'Content-Type': 'application/json' },
 							body,
 							json: true,
+							disableFollowRedirect: true,
+							sendCredentialsOnCrossOriginRedirect: false,
 						},
 					)) as AllowlySealResponse;
 					if (
@@ -2274,7 +2563,7 @@ export class Allowly implements INodeType {
 							profile: SEAL_PROFILE,
 							recordSha256: digest,
 							workspaceId,
-							recordedAt: receipt.issued_at,
+							recordedAt: sealVerifier.decodeReceipt(receipt).issued_at,
 							receipt,
 							keysDocument: trustedKeys.document,
 							trustedKeyFingerprints: trustedKeys.fingerprints,
@@ -2324,7 +2613,7 @@ export class Allowly implements INodeType {
 							recordMatches: verification.recordMatches,
 							failureReason: verification.failureReason,
 							expectedWorkspaceId,
-							recordedAt: receipt.issued_at,
+							recordedAt: sealVerifier.decodeReceipt(receipt).issued_at,
 							receipt,
 							keysDocument: trustedKeys.document,
 							trustedKeyFingerprints: trustedKeys.fingerprints,
@@ -2336,12 +2625,24 @@ export class Allowly implements INodeType {
 
 				if (operation === 'createAuthorization') {
 					const policyId = (this.getNodeParameter('policyId', itemIndex) as string).trim();
+					const policyVersion = this.getNodeParameter('policyVersion', itemIndex);
+					const scopeInput = this.getNodeParameter('authorizationActions', itemIndex, '');
+					if (typeof policyVersion !== 'number' || !Number.isSafeInteger(policyVersion) || policyVersion < 1) {
+						throw new NodeOperationError(this.getNode(), 'Policy Version must be an exact positive safe integer.', { itemIndex });
+					}
+					if (typeof scopeInput !== 'string') throw new NodeOperationError(this.getNode(), 'Action Scope must be JSON text.', { itemIndex });
+					let scope: string[] | undefined;
+					if (scopeInput.trim()) {
+						sealVerifier.hashSealJson(scopeInput);
+						scope = authorizationActions(JSON.parse(scopeInput));
+					}
 					const userIdentifierMode = this.getNodeParameter('userIdentifierMode', itemIndex) as string;
 					let userId: string;
 
-					if (!policyId) {
+					if (!policyId || [...policyId].length > 128) {
 						throw new NodeOperationError(this.getNode(), 'Policy is required.', { itemIndex });
 					}
+					sealVerifier.hashSealValue(policyId);
 
 					if (userIdentifierMode === 'emailHmac') {
 						const userEmail = (this.getNodeParameter('userEmail', itemIndex) as string).trim();
@@ -2364,7 +2665,7 @@ export class Allowly implements INodeType {
 
 					const options: IHttpRequestOptions = {
 						method: 'POST',
-						url: `${API_URL}/v1/authorizations`,
+						url: `${apiBaseUrl()}/v1/authorizations`,
 						headers: {
 							'Content-Type': 'application/json',
 							'Idempotency-Key': idempotencyKey,
@@ -2372,8 +2673,12 @@ export class Allowly implements INodeType {
 						body: {
 							user_id: userId,
 							policy_id: policyId,
+							policy_version: policyVersion,
+							...(scope === undefined ? {} : { actions: scope }),
 						},
 						json: true,
+						disableFollowRedirect: true,
+						sendCredentialsOnCrossOriginRedirect: false,
 					};
 
 					const response = (await this.helpers.httpRequestWithAuthentication.call(
@@ -2381,11 +2686,20 @@ export class Allowly implements INodeType {
 						'allowlyApi',
 						options,
 					)) as AllowlyAuthorizationResponse;
+					const policyRef = authorizationPolicyReference(response.policy_ref, policyId, policyVersion);
+					const grantedActions = authorizationActions(response.actions);
+					if (scope && (scope.length !== grantedActions.length || scope.some((name, index) => name !== grantedActions[index]))) {
+						throw new NodeOperationError(this.getNode(), 'Authorization action scope does not match the requested action names.', { itemIndex });
+					}
+					if (typeof response.authorization_id !== 'string' || !response.authorization_id) throw new NodeOperationError(this.getNode(), 'Invalid authorization ID.', { itemIndex });
 					returnData.push({
 						json: {
 							authorizationId: response.authorization_id,
 							userId,
 							policyId,
+							policyVersion,
+							policyRef,
+							actions: grantedActions,
 							receipt: response.receipt,
 							response,
 						} as IDataObject,
@@ -2419,7 +2733,7 @@ export class Allowly implements INodeType {
 						'allowlyApi',
 						{
 							method: 'POST',
-							url: `${API_URL}/v1/budget-settlements`,
+							url: `${apiBaseUrl()}/v1/budget-settlements`,
 							headers: {
 								'Content-Type': 'application/json',
 								'Idempotency-Key': settlementIdempotencyKey,
@@ -2429,6 +2743,8 @@ export class Allowly implements INodeType {
 								actual_cost_micros: actualCostMicros,
 							},
 							json: true,
+							disableFollowRedirect: true,
+							sendCredentialsOnCrossOriginRedirect: false,
 						},
 					)) as Record<string, unknown>;
 
@@ -2448,13 +2764,15 @@ export class Allowly implements INodeType {
 					}
 					const response = (await this.helpers.httpRequestWithAuthentication.call(this, 'allowlyApi', {
 						method: 'POST',
-						url: `${API_URL}/v1/confirmations/${encodeURIComponent(nonce)}`,
+						url: `${apiBaseUrl()}/v1/confirmations/${encodeURIComponent(nonce)}`,
 						headers: {
 							'Content-Type': 'application/json',
 							'Idempotency-Key': confirmationIdempotencyKey,
 						},
 						body: { approved, ttl_seconds: ttlSeconds },
 						json: true,
+						disableFollowRedirect: true,
+						sendCredentialsOnCrossOriginRedirect: false,
 					})) as Record<string, unknown>;
 					returnData.push({
 						json: response as IDataObject,
@@ -2486,10 +2804,12 @@ export class Allowly implements INodeType {
 					if (note) body.note = note;
 					const response = (await this.helpers.httpRequestWithAuthentication.call(this, 'allowlyApi', {
 						method: 'POST',
-						url: `${API_URL}/v1/escalations/${encodeURIComponent(escalationId)}/resolve`,
+						url: `${apiBaseUrl()}/v1/escalations/${encodeURIComponent(escalationId)}/resolve`,
 						headers: { 'Content-Type': 'application/json' },
 						body,
 						json: true,
+						disableFollowRedirect: true,
+						sendCredentialsOnCrossOriginRedirect: false,
 					})) as Record<string, unknown>;
 					returnData.push({
 						json: response as IDataObject,
@@ -2542,7 +2862,7 @@ export class Allowly implements INodeType {
 
 				const options: IHttpRequestOptions = {
 					method: 'POST',
-					url: `${API_URL}/v1/check`,
+					url: `${apiBaseUrl()}/v1/check`,
 					headers: {
 						'Content-Type': 'application/json',
 						'Idempotency-Key': idempotencyKey,
@@ -2550,7 +2870,7 @@ export class Allowly implements INodeType {
 					},
 					body,
 					json: true,
-					disableFollowRedirect: identityToken !== undefined,
+					disableFollowRedirect: true,
 					sendCredentialsOnCrossOriginRedirect: false,
 				};
 
@@ -2570,14 +2890,39 @@ export class Allowly implements INodeType {
 						{ itemIndex },
 					);
 				}
+				// Decode only for routing. The original envelope remains unverified evidence.
+				const workspaceId = credentials.executionWorkspaceId ? executionWorkspace(credentials) : null;
+				let receiptId: string | null = null;
+				if (result.receipt !== undefined && result.receipt !== null) {
+					if (!isRecord(result.receipt)) throw new ApplicationError('Invalid decision receipt envelope.');
+					if (result.receipt.status === 'pending') receiptId = result.receipt.receipt_id as string;
+					else if (result.receipt.status === 'signed' && isRecord(result.receipt.receipt)) {
+						const claims = sealVerifier.decodeReceipt(result.receipt.receipt);
+						receiptId = claims.receipt_id as string;
+						if (claims.action !== action || claims.authorization_id !== authorizationId
+							|| claims.decision !== result.decision || claims.reason !== result.reason) {
+							throw new ApplicationError('Decision receipt does not match the checked action, authorization or result.');
+						}
+						if (workspaceId !== null && claims.workspace_id !== workspaceId) {
+							throw new ApplicationError('Decision receipt workspace does not match trusted credential configuration.');
+						}
+					} else throw new ApplicationError('Invalid decision receipt envelope.');
+					if (typeof receiptId !== 'string' || !/^rcp_[A-Za-z0-9_-]+$/.test(receiptId)) {
+						throw new ApplicationError('Invalid decision receipt ID.');
+					}
+				}
 
 				returnData.push({
 					json: {
 						protectedActionAllowed,
 						action,
+						authorizationId,
 						decision: result.decision,
 						reason: result.reason,
 						receipt: result.receipt,
+						receiptId,
+						receiptUrl: receiptId === null ? null : `${apiBaseUrl()}/v1/receipts/${encodeURIComponent(receiptId)}`,
+						workspaceId,
 						policyEval: result.policy_eval ?? null,
 						confirmNonce: result.confirm_nonce,
 						confirmExpiresAt: result.confirm_expires_at,

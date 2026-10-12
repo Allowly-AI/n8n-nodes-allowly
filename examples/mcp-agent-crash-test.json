@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "# Agent Crash Test\n\nA poisoned support email tells the agent to export a fake customer list. The agent calls `send_email`, but Allowly checks trusted metadata before Zoho Mail.\n\n**Expected result:** `deny` → Zoho Mail never runs.\n\nRead `examples/mcp-agent-crash-test.md`, then click **Test workflow** to run a simulated compromised-agent call without an MCP client. The `.example.invalid` list detector is demo-only, not general DLP.",
+        "content": "# Agent Crash Test\n\nA poisoned support email tells the agent to export a fake customer list. The agent calls `send_email`, but Allowly checks trusted metadata before Zoho Mail.\n\n**Expected result:** `deny` → Zoho Mail never runs.\n\nRead `examples/mcp-agent-crash-test.md`, then click **Test workflow** to run a simulated compromised-agent call without an MCP client. The `.example.invalid` list detector is demo-only, not general DLP.\n\n### Receipt setup\nSet Execution Workspace ID in the Allowly credential from trusted settings. Install the same Allowly package on the Code runtime/task runner and allow NODE_FUNCTION_ALLOW_EXTERNAL=n8n-nodes-allowly. Missing decoder access fails closed. Original signed JWS is retained; decoding is not signature verification. Receipt URLs follow the operator API endpoint.",
         "height": 300,
         "width": 720,
         "color": 7
@@ -220,6 +220,8 @@
       "parameters": {
         "operation": "createAuthorization",
         "policyId": "mcp_agent_crash_test_v1",
+        "policyVersion": 1,
+        "authorizationActions": "[\"mcp_demo.email.send\"]",
         "userIdentifierMode": "opaque",
         "userId": "mcp-crash-test-user"
       },
@@ -421,7 +423,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const decision = $json;\nconst action = 'mcp_demo.email.send';\nconst receiptId = decision.receipt?.receipt_id ?? decision.receipt?.receipt?.receipt_id;\nif (decision.action !== action || !['allow', 'deny', 'confirm', 'escalate'].includes(decision.decision) || decision.results?.[action]?.decision !== decision.decision || typeof decision.reason !== 'string' || !decision.reason || typeof receiptId !== 'string' || !/^rcp_[A-Za-z0-9_-]+$/.test(receiptId)) {\n  throw new Error('Invalid Allowly decision; Zoho Mail was not called.');\n}\nreturn [{ json: { ...decision, receipt_id: receiptId } }];"
+        "jsCode": "const { decodeReceipt } = require('n8n-nodes-allowly/dist/nodes/Allowly/seal-verifier.js');\nconst decision = $json;\nconst action = 'mcp_demo.email.send';\nconst envelope = decision.receipt;\nconst claims = envelope?.status === 'signed' ? decodeReceipt(envelope.receipt) : null;\nconst receiptId = envelope?.status === 'pending' ? envelope.receipt_id : claims?.receipt_id;\nif (!['pending','signed'].includes(envelope?.status) || receiptId !== decision.receiptId || typeof decision.workspaceId !== 'string' || !decision.workspaceId || (claims !== null && (claims.workspace_id !== decision.workspaceId || claims.action !== decision.action || claims.authorization_id !== decision.authorizationId || claims.decision !== decision.decision || claims.reason !== decision.reason)) || decision.action !== action || !['allow', 'deny', 'confirm', 'escalate'].includes(decision.decision) || decision.results?.[action]?.decision !== decision.decision || typeof decision.reason !== 'string' || !decision.reason || typeof receiptId !== 'string' || !/^rcp_[A-Za-z0-9_-]+$/.test(receiptId)) {\n  throw new Error('Invalid Allowly decision; Zoho Mail was not called.');\n}\nreturn [{ json: { ...decision, receipt_id: receiptId, receiptVerification: 'not_performed' } }];"
       },
       "id": "5a4dde16-f19e-4ac2-a654-70f15703fd42",
       "name": "Validate Allowly decision",
@@ -491,7 +493,7 @@
     {
       "parameters": {
         "errorType": "errorMessage",
-        "errorMessage": "={{ JSON.stringify({ status: 'NOT FORWARDED', decision: $json.decision || 'missing', reason: $json.reason || 'missing_reason', receipt_id: $json.receipt?.receipt_id || $json.receipt?.receipt?.receipt_id || null, receipt_url: $json.receipt?.url || null }) }}"
+        "errorMessage": "={{ JSON.stringify({ status: 'NOT FORWARDED', decision: $json.decision || 'missing', reason: $json.reason || 'missing_reason', receipt_id: $json.receiptId || null, receipt_url: $json.receiptUrl || null }) }}"
       },
       "id": "c5e228b4-b023-4088-9310-09f94178122b",
       "name": "DENIED or paused — Zoho Mail not called",
