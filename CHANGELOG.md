@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.1
+
+- Use the platform temporary directory for durable-execution tests so Linux
+  release checks run without a macOS-only path. Runtime behavior is unchanged.
+
 ## 0.5.0
 
 - Use the published SDK 0.8.0 and verifier 5.0.0 with registry-backed locks

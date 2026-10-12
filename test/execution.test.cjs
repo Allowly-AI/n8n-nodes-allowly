@@ -3,6 +3,7 @@ const test = require('node:test');
 const { createHmac, createHash } = require('node:crypto');
 const { mkdtemp, realpath, readFile, readdir, chmod, symlink } = require('node:fs/promises');
 const { join } = require('node:path');
+const { tmpdir } = require('node:os');
 const { EventEmitter } = require('node:events');
 const dns = require('node:dns/promises');
 const https = require('node:https');
@@ -76,7 +77,7 @@ async function invoke(operation, request = original, credentials = {}, extra = {
 }
 
 async function isolated(t, run) {
-  const directory = await realpath(await mkdtemp('/private/tmp/allowly-node-execution-'));
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'allowly-node-execution-')));
   const old = process.env.ALLOWLY_N8N_STATE_DIRECTORY;
   process.env.ALLOWLY_N8N_STATE_DIRECTORY = directory;
   const fetch = global.fetch, lookup = dns.lookup, request = https.request;
