@@ -1,0 +1,34 @@
+{
+  "source_repository": "https://github.com/Allowly-AI/allowly-receipt-format",
+  "source_commit": "e9b092242afdf65dbe6cc4718e25cf67549c0d82",
+  "source_path": "test-vectors.json",
+  "source_sha256": "2fc315524b9ae0840a8b155b0d8c19fd0890af19936b58062f798cbaec9218cc",
+  "source_vector": "action_unicode",
+  "expected_workspace_id": "ws_test",
+  "public_keys": {
+    "workspace_id": "ws_test",
+    "keys": [
+      {
+        "key_id": "test-key/v1",
+        "alg": "Ed25519",
+        "public_key": "O2onvM62pC1io6jQKm8Nc2UyFXcd4kOmOsBIoYtZ2ik",
+        "public_key_fingerprint": "sha256:139e3940e64b5491722088d9a0d741628fc826e09475d341a780acde3c4b8070",
+        "active_from": "0001-01-01T00:00:00.000Z",
+        "active_until": null
+      },
+      {
+        "key_id": "test-key/v2",
+        "alg": "Ed25519",
+        "public_key": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w",
+        "public_key_fingerprint": "sha256:34750f98bd59fcfc946da45aaabe933be154a4b5094e1c4abf42866505f3c97e",
+        "active_from": "2026-04-01T00:00:00.000Z",
+        "active_until": "2026-05-01T00:00:00.000Z"
+      }
+    ]
+  },
+  "receipt": {
+    "protected": "eyJhbGciOiJFZERTQSIsImtpZCI6InRlc3Qta2V5L3YxIiwidHlwIjoiYWxsb3dseS1yZWNlaXB0K2p3cyJ9",
+    "payload": "eyJhY3Rpb24iOiJlbWFpbC5zZW5kIiwiYWdlbnRfaWQiOiJhZ2VudF_ml6XmnKzoqp4iLCJhdXRob3JpemF0aW9uX2lkIjoiYXV0aF91bmljb2RlIiwiY29udGV4dCI6eyJub3RlIjoiWsO8cmljaCDihpIgS8O4YmVuaGF2biJ9LCJkZWNpc2lvbiI6ImFsbG93IiwiZW5naW5lX3ZlcnNpb24iOiJzaGEyNTY6ZDU1ODlhYjM2ZTllNGRlZGY1Y2JhYzliYjcyNmUyN2M2NTA1ZTYyYTJhMzA5MTFiNmZkOTI3MTA2NjRkYTdjMyIsImlzc3VlZF9hdCI6IjIwMjYtMDQtMjFUMTU6MzA6MDAuMDAwWiIsInBvbGljeV9yZWYiOnsiZGVmaW5pdGlvbl9zaGEyNTYiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwicG9saWN5X2lkIjoicG9sX2ZpeHR1cmUiLCJwb2xpY3lfdmVyc2lvbiI6MX0sInJlYXNvbiI6ImF1dGhvcml6YXRpb25fZ3JhbnRlZF9hY3Rpb25fYWN0aXZlIiwicmVjZWlwdF9pZCI6InJjcF8wMUhYWlVOSUNPREUwMDAwMDAwMDAwMDAwMCIsInJlc291cmNlIjoiaW1hcDpmb2xkZXI65Y-X5L-h566xIiwic2NoZW1hX3ZlcnNpb24iOiI1IiwidXNlcl9pZCI6InVzdcOhcmlvXzEyMyIsIndvcmtzcGFjZV9pZCI6IndzX3Rlc3QifQ",
+    "signature": "Ipx7RJVgRaOcaqFaqXcZnSoc64Ou0vSgZ-38CSPlcheVxDUAs6rPSlfaL-OGGEBeDtjp1iFr6bk8zO4MwdjkDg"
+  }
+}

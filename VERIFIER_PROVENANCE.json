@@ -2,14 +2,17 @@
   "source_package": "@allowly/verifier",
   "source_version": "5.0.0",
   "source_repository": "https://github.com/Allowly-AI/allowly-receipt-format",
-  "source_base_commit": "1d898b9a7385e0b0eeb5d88c0a9be7d6a5658f83",
-  "source_status": "local_committed",
+  "source_base_commit": "e9b092242afdf65dbe6cc4718e25cf67549c0d82",
+  "source_status": "published_registry",
+  "source_tarball": "https://registry.npmjs.org/@allowly/verifier/-/verifier-5.0.0.tgz",
+  "source_integrity": "sha512-gd3u5I7xocgZdrzWiwZcZCSq3UYW9yziF82SIbuevZb6ftLPGTNrtwhxAVMRWB18NgbMos/RqSDDq25bBFeYAA==",
   "bundle": {
     "path": "nodes/Allowly/seal-verifier.js",
-    "sha256": "dbdb7c82ad8b6565d071c9910c7f0feab3f16e9a5252f41a3f78c1e5b93a1477"
+    "sha256": "9ac15cb3a729bd70390cd4c6cbd5636e0f2e67e534ba65186b8646c333e5fe44"
   },
   "fixtures": {
     "test/fixtures/seal/profile-v1.json": "7c86f0e2086b00fc1a4306eb29f2e158e8f464669804323d40c020f3e9d3367f",
-    "test/fixtures/seal/verification-v1.json": "82812d298eae1ae22282ab96697817d32533a2661d5b9f59a250c776993dad5a"
+    "test/fixtures/seal/verification-v1.json": "82812d298eae1ae22282ab96697817d32533a2661d5b9f59a250c776993dad5a",
+    "test/fixtures/official-check-receipt.json": "1303a71285a00f18adaeae457b9e569d1b940c8b75ff68a0451f37765bb73e36"
   }
 }

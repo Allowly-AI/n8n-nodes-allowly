@@ -1,4 +1,4 @@
-/* Bundled from local unpublished @allowly/verifier 5.0.0; wire 5 only. See VERIFIER_PROVENANCE.json. */
+/* Bundled from published @allowly/verifier 5.0.0; wire 5 only. See VERIFIER_PROVENANCE.json. */
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -17,7 +17,7 @@ var __copyProps = (to, from, except, desc) => {
 };
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-// ../allowly-receipt-format/verifiers/typescript/seal-verifier-entry.js
+// node_modules/@allowly/verifier/seal-verifier-entry.js
 var seal_verifier_entry_exports = {};
 __export(seal_verifier_entry_exports, {
   SEAL_MAX_DEPTH: () => SEAL_MAX_DEPTH,
@@ -34,10 +34,10 @@ __export(seal_verifier_entry_exports, {
 });
 module.exports = __toCommonJS(seal_verifier_entry_exports);
 
-// ../allowly-receipt-format/verifiers/typescript/dist/verifier.js
+// node_modules/@allowly/verifier/dist/verifier.js
 var import_node_crypto = require("node:crypto");
 
-// ../allowly-receipt-format/verifiers/typescript/node_modules/canonicalize/lib/canonicalize.js
+// node_modules/canonicalize/lib/canonicalize.js
 function canonicalize(object, seen = /* @__PURE__ */ new Set()) {
   if (typeof object === "number" && isNaN(object)) {
     throw new Error("NaN is not allowed");
@@ -82,7 +82,7 @@ function canonicalize(object, seen = /* @__PURE__ */ new Set()) {
   return result;
 }
 
-// ../allowly-receipt-format/verifiers/typescript/node_modules/lossless-json/lib/esm/utils.js
+// node_modules/lossless-json/lib/esm/utils.js
 function isInteger(value) {
   return INTEGER_REGEX.test(value);
 }
@@ -174,7 +174,7 @@ function getSignificantDigitRange(value) {
   };
 }
 
-// ../allowly-receipt-format/verifiers/typescript/node_modules/lossless-json/lib/esm/LosslessNumber.js
+// node_modules/lossless-json/lib/esm/LosslessNumber.js
 var LosslessNumber = class {
   // numeric value as string
   // type information
@@ -220,12 +220,12 @@ function isLosslessNumber(value) {
   return value && typeof value === "object" && value.isLosslessNumber || false;
 }
 
-// ../allowly-receipt-format/verifiers/typescript/node_modules/lossless-json/lib/esm/numberParsers.js
+// node_modules/lossless-json/lib/esm/numberParsers.js
 function parseLosslessNumber(value) {
   return new LosslessNumber(value);
 }
 
-// ../allowly-receipt-format/verifiers/typescript/node_modules/lossless-json/lib/esm/revive.js
+// node_modules/lossless-json/lib/esm/revive.js
 function revive(json, reviver) {
   return reviveValue({
     "": json
@@ -258,7 +258,7 @@ function reviveArray(array, reviver) {
   return array;
 }
 
-// ../allowly-receipt-format/verifiers/typescript/node_modules/lossless-json/lib/esm/parse.js
+// node_modules/lossless-json/lib/esm/parse.js
 function parse(text, reviver, options) {
   const optionsObj = typeof options === "function" ? {
     parseNumber: options
@@ -572,7 +572,7 @@ var codeLowercaseE = 101;
 var codeUppercaseF = 70;
 var codeLowercaseF = 102;
 
-// ../allowly-receipt-format/verifiers/typescript/node_modules/jose/dist/webapi/lib/buffer_utils.js
+// node_modules/jose/dist/webapi/lib/buffer_utils.js
 var encoder = new TextEncoder();
 var decoder = new TextDecoder();
 var strictDecoder = new TextDecoder("utf-8", { fatal: true });
@@ -623,7 +623,7 @@ function decodeBase64(encoded, url = false) {
   return bytes;
 }
 
-// ../allowly-receipt-format/verifiers/typescript/node_modules/jose/dist/webapi/util/errors.js
+// node_modules/jose/dist/webapi/util/errors.js
 var JOSEError = class extends Error {
   static code = "ERR_JOSE_GENERIC";
   code = "ERR_JOSE_GENERIC";
@@ -651,7 +651,7 @@ var JWSSignatureVerificationFailed = class extends JOSEError {
   }
 };
 
-// ../allowly-receipt-format/verifiers/typescript/node_modules/jose/dist/webapi/util/base64url.js
+// node_modules/jose/dist/webapi/util/base64url.js
 var base64url_exports = {};
 __export(base64url_exports, {
   decode: () => decode,
@@ -669,7 +669,7 @@ function encode2(input) {
   return encodeBase64(typeof input == "string" ? encoder.encode(input) : input, true);
 }
 
-// ../allowly-receipt-format/verifiers/typescript/node_modules/jose/dist/webapi/lib/validate.js
+// node_modules/jose/dist/webapi/lib/validate.js
 function isObject2(input) {
   if (typeof input != "object" || input === null || Object.prototype.toString.call(input) !== "[object Object]")
     return false;
@@ -746,7 +746,7 @@ function validateB64(protectedHeader, extensions) {
   return true;
 }
 
-// ../allowly-receipt-format/verifiers/typescript/node_modules/jose/dist/webapi/lib/key.js
+// node_modules/jose/dist/webapi/lib/key.js
 var tag = (key) => key[Symbol.toStringTag];
 var jwkMatchesOp = (entry, key, usage) => {
   const { alg } = entry;
@@ -882,7 +882,7 @@ async function rawKey(key, expected, usage, extractable = false) {
   return key instanceof Uint8Array && (key = await crypto.subtle.importKey("raw", key, expected, extractable, [usage])), checkCryptoKey(key, expected, usage), key;
 }
 
-// ../allowly-receipt-format/verifiers/typescript/node_modules/jose/dist/webapi/lib/key_descriptor.js
+// node_modules/jose/dist/webapi/lib/key_descriptor.js
 function table(entries) {
   const out = { __proto__: null };
   for (const alg in entries)
@@ -890,7 +890,7 @@ function table(entries) {
   return out;
 }
 
-// ../allowly-receipt-format/verifiers/typescript/node_modules/jose/dist/webapi/lib/jwe_algorithms.js
+// node_modules/jose/dist/webapi/lib/jwe_algorithms.js
 var wrap = [
   ["encrypt", "wrapKey"],
   ["decrypt", "unwrapKey"]
@@ -991,7 +991,7 @@ var ENC = table({
   "A256CBC-HS512": contentEncryption(512, true)
 });
 
-// ../allowly-receipt-format/verifiers/typescript/node_modules/jose/dist/webapi/lib/jws_algorithms.js
+// node_modules/jose/dist/webapi/lib/jws_algorithms.js
 var sig = [["verify"], ["sign"]];
 function hmac(bits) {
   const subtle = { name: "HMAC", hash: `SHA-${bits}` };
@@ -1061,7 +1061,7 @@ function jwsAlgorithm(alg) {
   return entry;
 }
 
-// ../allowly-receipt-format/verifiers/typescript/node_modules/jose/dist/webapi/lib/jws_verify.js
+// node_modules/jose/dist/webapi/lib/jws_verify.js
 function prepareVerify(options) {
   return [options && validateAlgorithms("algorithms", options.algorithms), options?.crit];
 }
@@ -1113,13 +1113,13 @@ async function verifyCompact(jws, shared, key) {
   return verifySignature({ payload, protected: protectedHeader, signature }, shared, key, encodeCompactUnencodedPayload);
 }
 
-// ../allowly-receipt-format/verifiers/typescript/node_modules/jose/dist/webapi/jws/compact/verify.js
+// node_modules/jose/dist/webapi/jws/compact/verify.js
 async function compactVerify(jws, key, options) {
   const [result] = await verifyCompact(jws, prepareVerify(options), key);
   return result;
 }
 
-// ../allowly-receipt-format/verifiers/typescript/node_modules/jose/dist/webapi/lib/key_algorithm.js
+// node_modules/jose/dist/webapi/lib/key_algorithm.js
 function unsupportedAlg(source = 'JWK "alg" (Algorithm) Parameter') {
   throw new JOSENotSupported(`Invalid or unsupported ${source} value`);
 }
@@ -1127,7 +1127,7 @@ function keyAlgorithm(alg, source) {
   return (typeof alg == "string" ? JWS[alg] ?? JWE[alg] : void 0) ?? unsupportedAlg(source);
 }
 
-// ../allowly-receipt-format/verifiers/typescript/node_modules/jose/dist/webapi/key/import.js
+// node_modules/jose/dist/webapi/key/import.js
 async function importJWK(jwk, alg, options) {
   if (!isObject2(jwk))
     throw new TypeError("JWK must be an object");
@@ -1155,7 +1155,7 @@ async function importJWK(jwk, alg, options) {
   }
 }
 
-// ../allowly-receipt-format/verifiers/typescript/dist/verifier.js
+// node_modules/@allowly/verifier/dist/verifier.js
 var SPEC_VERSION = "5";
 var ACTION_DECISIONS = /* @__PURE__ */ new Set(["allow", "deny", "confirm", "escalate"]);
 var EVENT_DECISIONS = {
@@ -1816,7 +1816,7 @@ function checkPolicyEval(value) {
   if (typeof fields !== "object" || fields === null || Array.isArray(fields) || Object.keys(fields).some((key) => !key || [...key].length > 128))
     throw new VerificationError("policy_eval.result.evaluated_fields must be an object with bounded nonempty field names");
   if (rule === null && Object.keys(fields).length)
-    throw new VerificationError("policy_eval.result default requires empty evaluated_fields");
+    throw new VerificationError("policy_eval.result action decision requires empty evaluated_fields");
 }
 var CHECKPOINT_ROOT_RE = /^sha256:[0-9a-f]{64}$/;
 var CHECKPOINT_CONTEXT_FIELDS = [

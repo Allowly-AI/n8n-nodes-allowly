@@ -58,9 +58,20 @@ function packagedSealVector(relativePath) {
 
 test('vendored verifier and SEAL fixtures match recorded provenance', () => {
 	const provenance = require('../VERIFIER_PROVENANCE.json');
+	const lock = require('../package-lock.json').packages['node_modules/@allowly/verifier'];
 	assert.equal(provenance.source_version, '5.0.0');
 	assert.match(provenance.source_base_commit, /^[a-f0-9]{40}$/);
-	assert.ok(['local_committed', 'local_uncommitted'].includes(provenance.source_status));
+	assert.equal(provenance.source_status, 'published_registry');
+	assert.equal(lock.version, provenance.source_version);
+	assert.notEqual(lock.link, true);
+	assert.equal(provenance.source_tarball, 'https://registry.npmjs.org/@allowly/verifier/-/verifier-5.0.0.tgz');
+	assert.equal(provenance.source_tarball, lock.resolved);
+	assert.match(provenance.source_integrity, /^sha512-/);
+	assert.equal(provenance.source_integrity, lock.integrity);
+	assert.equal(require('./fixtures/official-check-receipt.json').source_commit, provenance.source_base_commit);
+	for (const name of ['profile-v1.json', 'verification-v1.json']) {
+		assert.deepEqual(packagedSealVector(name), JSON.parse(readFileSync(require.resolve(`@allowly/verifier/vectors/seal/${name}`), 'utf8')));
+	}
 	const expected = {
 		[provenance.bundle.path]: provenance.bundle.sha256,
 		...provenance.fixtures,
@@ -185,9 +196,10 @@ test('Check normalizes pending/signed receipt routing without changing original 
 	const oldUrl = process.env.ALLOWLY_N8N_API_BASE_URL;
 	t.after(() => { if (oldUrl === undefined) delete process.env.ALLOWLY_N8N_API_BASE_URL; else process.env.ALLOWLY_N8N_API_BASE_URL = oldUrl; });
 	process.env.ALLOWLY_N8N_API_BASE_URL = 'https://runtime.example.invalid/';
-	const official = JSON.parse(readFileSync(join(__dirname, '../../allowly-receipt-format/test-vectors.json')));
-	const receipt = official.should_verify.find(vector => decodeReceipt(vector.receipt).action === 'email.send').receipt;
-	const vector = { expected_workspace_id: 'ws_test' };
+	const vector = require('./fixtures/official-check-receipt.json');
+	const { loadKeysFromJson, verifyReceipt } = await import('@allowly/verifier');
+	const receipt = vector.receipt;
+	await verifyReceipt(receipt, loadKeysFromJson(vector.public_keys), { expectedWorkspaceId: vector.expected_workspace_id });
 	const receiptId = decodeReceipt(receipt).receipt_id;
 	const parameters = { operation: 'check', authorization: 'auth_unicode', actions: 'email.send', resource: '', session: '',
 		estimatedCostMicros: -1, workflowUser: '', workflowAgent: '', contextJson: {}, clientTimestamp: '' };
@@ -1465,13 +1477,13 @@ for (const code of [
 	});
 }
 
-test("fresh local SEAL verifier rejects a validly signed wire4 receipt", async () => {
+test("published SEAL verifier rejects a validly signed wire4 receipt", async () => {
   const verifier = require("../nodes/Allowly/seal-verifier");
   const fixture = JSON.parse(require("node:fs").readFileSync(require("node:path").join(__dirname, "fixtures/seal/verification-v1.json"), "utf8"));
   const vector = fixture.should_verify[0];
   const keys = verifier.loadKeysFromJson(fixture.public_keys);
   const crypto = require("node:crypto");
-  const { canonicalize } = await import(require("node:url").pathToFileURL(require("node:path").resolve(__dirname, "../../allowly-receipt-format/verifiers/typescript/dist/verifier.js")));
+  const { canonicalize } = await import('@allowly/verifier');
   const privateKey = crypto.createPrivateKey({ key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), Buffer.alloc(32)]), format: "der", type: "pkcs8" });
   const payload = { ...verifier.decodeReceipt(vector.receipt), schema_version: "4", alg: "Ed25519", key_id: "test-key/v1" };
   delete payload.signature;

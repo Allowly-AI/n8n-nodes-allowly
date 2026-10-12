@@ -203,7 +203,7 @@ test('the supplied policy contains an action decision, conditional deny/confirm 
 });
 
 test('policy examples pass the maintained SDK definition validator', async () => {
-	const { validatePolicyDefinition } = await import('../../allowly-sdk-ts/dist/index.js');
+	const { validatePolicyDefinition } = await import('@allowly/sdk');
 	for (const name of ['mcp-agent-crash-test.allowly.setup.json', 'stripe-refund-with-approval.md', 'stripe-refund-with-jev.md']) {
 		const text = readFileSync(example(name), 'utf8');
 		const value = JSON.parse(name.endsWith('.md') ? text.match(/```json\n([\s\S]*?)\n```/)[1] : text);

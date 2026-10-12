@@ -19,7 +19,7 @@ const request = {
 const clone = structuredClone;
 
 test('fictional workflow action fixtures verify with the maintained wire-5 verifier', async () => {
-	const { loadKeysFromJson, verifyReceipt } = await import('../../allowly-receipt-format/verifiers/typescript/dist/verifier.js');
+	const { loadKeysFromJson, verifyReceipt } = await import('@allowly/verifier');
 	const keys = await loadKeysFromJson(receiptVector.public_keys);
 	for (const receipt of Object.values(receiptVector.receipts)) {
 		const claims = await verifyReceipt(receipt, keys, { expectedWorkspaceId: 'ws_test' });

@@ -6,13 +6,13 @@ Use it to seal and verify JSON records, or to authorize and check an AI agent, t
 
 ## Install in n8n
 
-This feature checkout is a local unpublished **0.5.0** build with SDK 0.7.0 and verifier 5.0.0. It is not available from the package registry. Its durable Execute operations are self-hosted only; do not claim n8n Cloud verification or restart safety for this build.
+Version **0.5.0** uses SDK 0.8.0 and verifier 5.0.0, with receipt wire 5 only. Durable Execute operations are self-hosted only; n8n Cloud verification and restart safety are not claimed.
 
 On self-hosted n8n, an Owner or Admin can install the package:
 
 1. Open n8n.
 2. Go to **Settings -> Community Nodes**.
-3. Build and pack this checkout locally, then install its generated artifact in a fresh test instance:
+3. Install `n8n-nodes-allowly`. For local testing, build and pack this checkout instead:
 
 ```text
 npm run build
@@ -476,9 +476,10 @@ The refund and MCP crash-test examples require that trusted workspace field. The
 }
 ```
 
-## Local OPA rebuild
+## Receipt wire 5
 
-This checkout bundles the unpublished verifier 5.0.0 source and accepts wire 5
-only. Run `npm run refresh:verifier` after building the sibling verifier.
+This package bundles the published verifier 5.0.0 and accepts wire 5 only.
+After `npm ci`, run `npm run refresh:verifier` to rebuild from the registry-locked
+package and record its public tarball, integrity and source commit.
 SEAL checks signatures and record hashes; it does not replay policy or verify
-transactional enforcement. Do not release this local rebuild.
+transactional enforcement.
