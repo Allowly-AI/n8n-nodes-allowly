@@ -5,6 +5,10 @@ const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 const vm = require('node:vm');
 const { Allowly } = require('../dist/nodes/Allowly/Allowly.node.js');
+const receiptVerifier = require('../dist/nodes/Allowly/seal-verifier.js');
+const receiptVector = JSON.parse(readFileSync(join(__dirname, 'fixtures/workflow-receipts.json')));
+const signedReceipt = receiptVector.receipts.refund;
+const signedReceiptId = receiptVerifier.decodeReceipt(signedReceipt).receipt_id;
 
 const workflow = JSON.parse(readFileSync(join(__dirname, '../examples/stripe-refund-with-approval.json')));
 const nodes = Object.fromEntries(workflow.nodes.map((node) => [node.name, node]));
@@ -13,6 +17,15 @@ const request = {
 	paymentIntentId: 'pi_test123', amountMinor: 2500, currency: 'usd', reason: 'requested_by_customer',
 };
 const clone = structuredClone;
+
+test('fictional workflow action fixtures verify with the maintained wire-5 verifier', async () => {
+	const { loadKeysFromJson, verifyReceipt } = await import('../../allowly-receipt-format/verifiers/typescript/dist/verifier.js');
+	const keys = await loadKeysFromJson(receiptVector.public_keys);
+	for (const receipt of Object.values(receiptVector.receipts)) {
+		const claims = await verifyReceipt(receipt, keys, { expectedWorkspaceId: 'ws_test' });
+		assert.equal(claims.schema_version, '5');
+	}
+});
 
 // Execute the exported graph and its Code/expressions, with real Allowly node execution.
 // Only external services, the human response, and core node plumbing are simulated.
@@ -27,6 +40,11 @@ async function run(options = {}) {
 	const executionId = options.executionId ?? 'refund-execution-1';
 	function scope() {
 		return {
+			require: (name) => {
+				assert.equal(name, 'n8n-nodes-allowly/dist/nodes/Allowly/seal-verifier.js');
+				if (options.decoderUnavailable) throw new Error('Allowly decoder is not installed on this Code runner');
+				return receiptVerifier;
+			},
 			$json: item,
 			$input: { first: () => ({ json: item }), all: () => [{ json: item }] },
 			$: (name) => ({ first: () => ({ json: outputs[name] }) }),
@@ -45,7 +63,9 @@ async function run(options = {}) {
 			if (options.checkIdentity) options.checkIdentity(call);
 			const decision = (options.decisions ?? ['allow'])[checks++] ?? 'allow';
 			const result = {
-				decision, reason: 'test_reason', receipt: { status: 'pending', receipt_id: 'rcp_test' + checks },
+				decision, reason: 'authorization_granted_action_active', receipt: options.checkSigned
+					? { status: 'signed', receipt: signedReceipt }
+					: { status: 'pending', receipt_id: options.signed ? signedReceiptId : 'rcp_test' + checks, url: 'https://wrong-host.example/ignore' },
 				...(decision === 'confirm' ? { confirm_nonce: 'nonce_demo' } : {}),
 				...(decision === 'escalate' ? { escalation_id: 'esc_demo' } : {}),
 			};
@@ -74,7 +94,7 @@ async function run(options = {}) {
 			} else if (node.type === 'n8n-nodes-allowly.allowly') {
 				const params = Object.fromEntries(Object.entries(node.parameters).map(([key, val]) => [key, value(val)]));
 				const context = {
-					getInputData: () => [{ json: item }], getCredentials: async () => options.credentials ?? {},
+					getInputData: () => [{ json: item }], getCredentials: async () => options.credentials ?? { executionWorkspaceId: receiptVector.expected_workspace_id },
 					getNodeParameter: (name) => params[name], getExecutionId: () => executionId,
 					getNode: () => node, continueOnFail: () => false,
 					helpers: { httpRequestWithAuthentication: allowlyRequest },
@@ -101,10 +121,10 @@ async function run(options = {}) {
 					if (previous && JSON.stringify(previous.body) !== JSON.stringify(call.body)) throw new Error('Stripe idempotency parameter conflict');
 					item = previous?.response ?? { object: 'refund', id: 're_test' + (refunds.size + 1), payment_intent: call.body.payment_intent, amount: call.body.amount, currency: 'usd', status: 'succeeded' };
 					refunds.set(key, { body: clone(call.body), response: clone(item) });
-				} else if (call.url.startsWith('https://api.allowly.ai/v1/receipts/')) {
+				} else if (call.url.startsWith((process.env.ALLOWLY_N8N_API_BASE_URL ?? 'https://api.allowly.ai').replace(/\/$/, '') + '/v1/receipts/')) {
 					if (options.receiptError) throw new Error('Receipt unavailable');
 					const id = outputs['Refund result'].decision.receiptId;
-					item = options.receiptResponse ?? (options.signed ? { status: 'signed', receipt: { receipt_id: id, signature: 'fixture-not-a-verified-signature' } } : { status: 'pending', receipt_id: id });
+					item = options.receiptResponse ?? (options.signed || options.checkSigned ? { status: 'signed', receipt: signedReceipt } : { status: 'pending', receipt_id: id });
 				} else throw new Error('Unexpected HTTP request');
 			} else if (node.type.endsWith('.stopAndError')) throw new Error(node.parameters.errorMessage);
 			else assert.equal(node.type, 'n8n-nodes-base.manualTrigger');
@@ -169,7 +189,7 @@ function boundNativeIdentity() {
 	};
 	return {
 		credential,
-		credentials: { identityMode: 'allowlyNative', nativeAgentCredential: JSON.stringify(credential) },
+		credentials: { identityMode: 'allowlyNative', nativeAgentCredential: JSON.stringify(credential), executionWorkspaceId: credential.workspace_id },
 		checkIdentity: (call) => {
 			const token = call.headers['X-Allowly-Agent-Token'];
 			if (typeof token !== 'string') throw new Error('Bound authorization requires an identity token');
@@ -318,7 +338,49 @@ test('receipt failure preserves the refund result for recovery without another r
 });
 
 test('receipt response must belong to this decision', async () => {
-	const result = await run({ receiptResponse: { status: 'signed', receipt: { receipt_id: 'rcp_other', signature: 'wrong' } } });
+	const result = await run({ receiptResponse: { status: 'signed', receipt: signedReceipt } });
 	assert.ok(result.error);
 	assert.equal(result.outputs['Export refund evidence'], undefined);
+});
+
+test('wire-5 original signed bytes survive Check and refund export without a verification claim', async () => {
+	// Fictional action receipt from the maintained signing-input helper, not customer proof.
+	const result = await run({ checkSigned: true });
+	assert.equal(result.error, null);
+	assert.deepEqual(result.outputs['Export refund evidence'].decisionReceipt, { status: 'signed', receipt: signedReceipt });
+	assert.equal(result.outputs['Export refund evidence'].receiptVerification, 'not_performed');
+	assert.equal(result.outputs['Validate decision'].receiptId, signedReceiptId);
+	assert.equal(refundCalls(result).length, 1);
+});
+
+test('refund receipt fetch follows the operator endpoint, never the response URL', async t => {
+	const oldUrl = process.env.ALLOWLY_N8N_API_BASE_URL, oldLocal = process.env.ALLOWLY_N8N_ALLOW_LOCAL_API;
+	t.after(() => {
+		for (const [key, value] of [['ALLOWLY_N8N_API_BASE_URL', oldUrl], ['ALLOWLY_N8N_ALLOW_LOCAL_API', oldLocal]]) {
+			if (value === undefined) delete process.env[key]; else process.env[key] = value;
+		}
+	});
+	process.env.ALLOWLY_N8N_API_BASE_URL = 'http://127.0.0.1:18182/';
+	process.env.ALLOWLY_N8N_ALLOW_LOCAL_API = 'true';
+	const result = await run();
+	assert.equal(result.error, null);
+	const receipt = result.requests.find(call => call.credential === 'allowlyApi');
+	assert.equal(receipt.url, 'http://127.0.0.1:18182/v1/receipts/rcp_test1');
+	assert.equal(result.requests.some(call => call.url.startsWith('https://api.allowly.ai')), false);
+});
+
+for (const [name, options] of [
+	['missing trusted workspace', { credentials: {} }],
+	['foreign signed workspace', { signed: true, credentials: { executionWorkspaceId: 'ws_other' } }],
+	['unknown receipt status', { receiptResponse: { status: 'unknown', receipt_id: 'rcp_test1' } }],
+	['old flat signed receipt', { receiptResponse: { status: 'signed', receipt: { receipt_id: 'rcp_test1', signature: 'old-flat' } } }],
+	['malformed JWS', { receiptResponse: { status: 'signed', receipt: { ...signedReceipt, payload: '%' } } }],
+	['missing maintained decoder', { decoderUnavailable: true }],
+	...['cross_action', 'cross_authorization', 'cross_decision', 'cross_reason'].map(name =>
+		[name, { signed: true, receiptResponse: { status: 'signed', receipt: receiptVector.receipts[name] } }]),
+]) test(name + ' fails closed without success evidence', async () => {
+	const result = await run(options);
+	assert.ok(result.error);
+	assert.equal(result.outputs['Export refund evidence'], undefined);
+	if (['missing trusted workspace', 'missing maintained decoder'].includes(name)) assert.equal(refundCalls(result).length, 0);
 });

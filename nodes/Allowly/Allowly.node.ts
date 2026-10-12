@@ -205,7 +205,49 @@ function executionOutput(result: Awaited<ReturnType<InstanceType<ExecutionSdk['A
 	return JSON.parse(JSON.stringify({ ...safe, protectedActionAllowed: false, notificationOnly: false })) as IDataObject;
 }
 
+async function rejectedExecutionOutput(client: InstanceType<ExecutionSdk['Allowly']>,
+	request: ReturnType<typeof executionRequest>, error: unknown): Promise<IDataObject> {
+	// Continue has already checked the SDK journal's complete original request. A conflict alone is not a rejection.
+	if (!(error instanceof executionSdk.AllowlyAPIError) || error.status !== 409 || error.code !== 'execution_review_not_available') throw error;
+	const execution = await client.getExecution(request.options.operationId);
+	executionScope(executionSdk, execution, request);
+	const review = execution.review;
+	const sourceId = execution.decisionReceipt.status === 'pending' ? execution.decisionReceipt.receiptId
+		: sealVerifier.decodeReceipt(execution.decisionReceipt.receipt).receipt_id;
+	if (execution.status !== 'waiting_for_review' || !review || review.kind !== execution.decision
+		|| review.sourceReceiptId !== sourceId || execution.targetState !== 'not_started'
+		|| execution.decisionState !== 'not_allowed' || execution.approval !== null || execution.downstream !== null) throw error;
+	const resolution = review.kind === 'confirm' ? await client.confirmations.getStatus(review.id)
+		: await client.escalations.getStatus(review.id);
+	if (resolution.status !== 'rejected') throw error;
+	if (resolution.authorizationId !== request.options.authorizationId || resolution.action !== request.options.action
+		|| resolution.resource !== (request.options.policyInput?.resource ?? null)
+		|| resolution.sourceReceiptId !== review.sourceReceiptId || resolution.expiresAt !== review.expiresAt
+		|| !resolution.resolvedAt || !resolution.resolutionReceiptId || resolution.authorityStatus !== 'none') {
+		throw new ApplicationError('Execution review status lacks a bound recorded rejection.');
+	}
+	// Node-level terminal choice only. Retain the original execution and signed receipt links; no new execution outcome.
+	return JSON.parse(JSON.stringify({ state: 'denied', decision: 'deny', reason: 'review_rejected',
+		authorization: execution, review, resolution, protectedActionAllowed: false, notificationOnly: false })) as IDataObject;
+}
+
 const API_URL = 'https://api.allowly.ai';
+
+/** Server environment only; credentials, expressions and workflow input cannot select an API host. */
+export function apiBaseUrl(): string {
+	// eslint-disable-next-line @n8n/community-nodes/no-restricted-globals -- fixed operator configuration
+	const value = process.env.ALLOWLY_N8N_API_BASE_URL ?? API_URL;
+	// eslint-disable-next-line @n8n/community-nodes/no-restricted-globals -- explicit local fixture opt-in
+	const local = process.env.ALLOWLY_N8N_ALLOW_LOCAL_API === 'true';
+	if (!URL.canParse(value)) throw new ApplicationError('Operator API endpoint must be an HTTP(S) origin.');
+	const url = new URL(value);
+	const loopback = ['localhost', '127.0.0.1', '[::1]', 'host.docker.internal'].includes(url.hostname);
+	if ((value !== url.origin && value !== url.origin + '/') || url.username || url.password || url.search || url.hash || url.pathname !== '/'
+		|| (url.protocol !== 'https:' && !(local && loopback && url.protocol === 'http:'))) {
+		throw new ApplicationError('Operator API endpoint must be an HTTPS origin, or an explicitly enabled local HTTP origin.');
+	}
+	return url.origin;
+}
 
 const SEAL_WEBHOOK_PATH = '/v1/seal/webhooks';
 
@@ -411,8 +453,10 @@ export async function waitForSignedSeal(
 			'allowlyApi',
 			{
 				method: 'GET',
-				url: `${API_URL}/v1/receipts/${encodeURIComponent(expectedReceiptId)}`,
+				url: `${apiBaseUrl()}/v1/receipts/${encodeURIComponent(expectedReceiptId)}`,
 				json: true,
+				disableFollowRedirect: true,
+				sendCredentialsOnCrossOriginRedirect: false,
 			},
 		)) as AllowlyReceiptEnvelope;
 		if (current.status === 'pending' && pollDelayMs > 0) {
@@ -452,8 +496,10 @@ async function authenticatedWorkspaceKeys(
 		'allowlyApi',
 		{
 			method: 'GET',
-			url: `${API_URL}/v1/workspaces/${encodeURIComponent(expectedWorkspaceId)}/keys`,
+			url: `${apiBaseUrl()}/v1/workspaces/${encodeURIComponent(expectedWorkspaceId)}/keys`,
 			json: true,
+			disableFollowRedirect: true,
+			sendCredentialsOnCrossOriginRedirect: false,
 		},
 	);
 	return trustedKeysFromDocument(
@@ -1519,10 +1565,31 @@ export async function testSealWebhookCredential(
 	};
 }
 
+export async function testApiCredential(
+	this: ICredentialTestFunctions,
+	credential: ICredentialsDecrypted<ICredentialDataDecryptedObject>,
+): Promise<INodeCredentialTestResult> {
+	try {
+		const baseUrl = apiBaseUrl();
+		if (typeof credential.data?.apiKey !== 'string' || !credential.data.apiKey) {
+			return { status: 'Error', message: 'Allowly API key is required.' };
+		}
+		const request = Reflect.get(this.helpers, 'request') as ICredentialTestFunctions['helpers']['request'];
+		const response = await request({ method: 'GET', uri: `${baseUrl}/v1/authorizations?limit=1`,
+			headers: { Authorization: `Bearer ${credential.data.apiKey}` }, followRedirect: false,
+			json: true, resolveWithFullResponse: true, simple: false, timeout: 15_000 });
+		if (isRecord(response) && Number(response.statusCode) === 200) {
+			return { status: 'OK', message: 'Allowly API credential is valid.' };
+		}
+	} catch { /* Never expose endpoint or credential-bearing transport errors. */ }
+	return { status: 'Error', message: 'Allowly API credential check failed. Check the API key and operator endpoint.' };
+}
+
 export class Allowly implements INodeType {
 	methods = {
 		credentialTest: {
 			testSealWebhookCredential,
+			testApiCredential,
 		},
 	};
 
@@ -1569,6 +1636,7 @@ export class Allowly implements INodeType {
 			{
 				name: 'allowlyApi',
 				required: true,
+				testedBy: 'testApiCredential',
 				displayOptions: {
 					hide: { operation: ['sealWebhook', 'retrieveWebhookSeal', 'verifySealEvidence'] },
 				},
@@ -2327,10 +2395,7 @@ export class Allowly implements INodeType {
 					sensitiveValues.push(...[...Object.values(request.options.headers ?? {}), request.options.body ?? '']
 						.filter((value) => typeof value === 'string' && value.length > 0));
 					const storage = await executionStorage(workspaceId);
-					// eslint-disable-next-line @n8n/community-nodes/no-restricted-globals -- fixed self-hosted operator endpoint, never workflow-controlled
-					const baseUrl = process.env.ALLOWLY_N8N_API_BASE_URL ?? API_URL;
-					// eslint-disable-next-line @n8n/community-nodes/no-restricted-globals -- explicit local development only; SDK validates the endpoint
-					const localApi = process.env.ALLOWLY_N8N_ALLOW_LOCAL_API === 'true';
+					const baseUrl = apiBaseUrl();
 					const agentTokenSupplier = identityToken === undefined ? undefined : async () => {
 						const refreshed = await identityTokenForCredentials(this, itemIndex, credentials, identityTokenCache);
 						identityTokenCache = refreshed.cache;
@@ -2339,7 +2404,7 @@ export class Allowly implements INodeType {
 						return refreshed.token;
 					};
 					const client = new sdk.Allowly({ apiKey: credentials.apiKey as string, agentTokenSupplier,
-						baseUrl, dangerouslyAllowInsecureBaseUrl: localApi });
+						baseUrl, dangerouslyAllowInsecureBaseUrl: baseUrl.startsWith('http:') });
 					const options: HttpOptions = { ...request.options, journalDirectory: storage.journalDirectory,
 						// Installed native witness configuration remains the SDK's authority.
 						witness: { evidenceDirectory: join(storage.evidenceRoot, `witness-${createHash('sha256').update(`${workspaceId}:${request.options.operationId}`).digest('hex')}`), workspaceId } };
@@ -2351,12 +2416,20 @@ export class Allowly implements INodeType {
 							continue;
 						}
 					}
-					const result = operation === 'reconcileHttpExecution'
-						? await client.resumeHttpExecution({ operationId: options.operationId, journalDirectory: storage.journalDirectory })
-						: operation === 'continueHttpExecution'
-							? await client.continueHttpExecution(request.url, options)
-							: await client.executeHttp(request.url, options);
-					returnData.push({ json: executionOutput(result), pairedItem: { item: itemIndex } });
+					let output: IDataObject;
+					try {
+						const result = operation === 'reconcileHttpExecution'
+							? await client.resumeHttpExecution({ operationId: options.operationId, journalDirectory: storage.journalDirectory })
+							: operation === 'continueHttpExecution'
+								? await client.continueHttpExecution(request.url, options)
+								: await client.executeHttp(request.url, options);
+						output = executionOutput(result);
+					} catch (error) {
+						// eslint-disable-next-line @n8n/community-nodes/require-node-api-error -- outer item guard sanitizes and wraps all errors
+						if (operation !== 'continueHttpExecution') throw error;
+						output = await rejectedExecutionOutput(client, request, error);
+					}
+					returnData.push({ json: output, pairedItem: { item: itemIndex } });
 					continue;
 				}
 
@@ -2406,7 +2479,7 @@ export class Allowly implements INodeType {
 						'allowlyApi',
 						{
 							method: 'POST',
-							url: `${API_URL}/v1/receipts/${encodeURIComponent(receiptId)}/acknowledgments`,
+							url: `${apiBaseUrl()}/v1/receipts/${encodeURIComponent(receiptId)}/acknowledgments`,
 							headers: {
 								'Content-Type': 'application/json',
 								'Idempotency-Key': requestKey,
@@ -2447,10 +2520,12 @@ export class Allowly implements INodeType {
 						'allowlyApi',
 						{
 							method: 'POST',
-							url: `${API_URL}/v1/seal`,
+							url: `${apiBaseUrl()}/v1/seal`,
 							headers: { 'Content-Type': 'application/json' },
 							body,
 							json: true,
+							disableFollowRedirect: true,
+							sendCredentialsOnCrossOriginRedirect: false,
 						},
 					)) as AllowlySealResponse;
 					if (
@@ -2590,7 +2665,7 @@ export class Allowly implements INodeType {
 
 					const options: IHttpRequestOptions = {
 						method: 'POST',
-						url: `${API_URL}/v1/authorizations`,
+						url: `${apiBaseUrl()}/v1/authorizations`,
 						headers: {
 							'Content-Type': 'application/json',
 							'Idempotency-Key': idempotencyKey,
@@ -2602,6 +2677,8 @@ export class Allowly implements INodeType {
 							...(scope === undefined ? {} : { actions: scope }),
 						},
 						json: true,
+						disableFollowRedirect: true,
+						sendCredentialsOnCrossOriginRedirect: false,
 					};
 
 					const response = (await this.helpers.httpRequestWithAuthentication.call(
@@ -2656,7 +2733,7 @@ export class Allowly implements INodeType {
 						'allowlyApi',
 						{
 							method: 'POST',
-							url: `${API_URL}/v1/budget-settlements`,
+							url: `${apiBaseUrl()}/v1/budget-settlements`,
 							headers: {
 								'Content-Type': 'application/json',
 								'Idempotency-Key': settlementIdempotencyKey,
@@ -2666,6 +2743,8 @@ export class Allowly implements INodeType {
 								actual_cost_micros: actualCostMicros,
 							},
 							json: true,
+							disableFollowRedirect: true,
+							sendCredentialsOnCrossOriginRedirect: false,
 						},
 					)) as Record<string, unknown>;
 
@@ -2685,13 +2764,15 @@ export class Allowly implements INodeType {
 					}
 					const response = (await this.helpers.httpRequestWithAuthentication.call(this, 'allowlyApi', {
 						method: 'POST',
-						url: `${API_URL}/v1/confirmations/${encodeURIComponent(nonce)}`,
+						url: `${apiBaseUrl()}/v1/confirmations/${encodeURIComponent(nonce)}`,
 						headers: {
 							'Content-Type': 'application/json',
 							'Idempotency-Key': confirmationIdempotencyKey,
 						},
 						body: { approved, ttl_seconds: ttlSeconds },
 						json: true,
+						disableFollowRedirect: true,
+						sendCredentialsOnCrossOriginRedirect: false,
 					})) as Record<string, unknown>;
 					returnData.push({
 						json: response as IDataObject,
@@ -2723,10 +2804,12 @@ export class Allowly implements INodeType {
 					if (note) body.note = note;
 					const response = (await this.helpers.httpRequestWithAuthentication.call(this, 'allowlyApi', {
 						method: 'POST',
-						url: `${API_URL}/v1/escalations/${encodeURIComponent(escalationId)}/resolve`,
+						url: `${apiBaseUrl()}/v1/escalations/${encodeURIComponent(escalationId)}/resolve`,
 						headers: { 'Content-Type': 'application/json' },
 						body,
 						json: true,
+						disableFollowRedirect: true,
+						sendCredentialsOnCrossOriginRedirect: false,
 					})) as Record<string, unknown>;
 					returnData.push({
 						json: response as IDataObject,
@@ -2779,7 +2862,7 @@ export class Allowly implements INodeType {
 
 				const options: IHttpRequestOptions = {
 					method: 'POST',
-					url: `${API_URL}/v1/check`,
+					url: `${apiBaseUrl()}/v1/check`,
 					headers: {
 						'Content-Type': 'application/json',
 						'Idempotency-Key': idempotencyKey,
@@ -2787,7 +2870,7 @@ export class Allowly implements INodeType {
 					},
 					body,
 					json: true,
-					disableFollowRedirect: identityToken !== undefined,
+					disableFollowRedirect: true,
 					sendCredentialsOnCrossOriginRedirect: false,
 				};
 
@@ -2807,14 +2890,39 @@ export class Allowly implements INodeType {
 						{ itemIndex },
 					);
 				}
+				// Decode only for routing. The original envelope remains unverified evidence.
+				const workspaceId = credentials.executionWorkspaceId ? executionWorkspace(credentials) : null;
+				let receiptId: string | null = null;
+				if (result.receipt !== undefined && result.receipt !== null) {
+					if (!isRecord(result.receipt)) throw new ApplicationError('Invalid decision receipt envelope.');
+					if (result.receipt.status === 'pending') receiptId = result.receipt.receipt_id as string;
+					else if (result.receipt.status === 'signed' && isRecord(result.receipt.receipt)) {
+						const claims = sealVerifier.decodeReceipt(result.receipt.receipt);
+						receiptId = claims.receipt_id as string;
+						if (claims.action !== action || claims.authorization_id !== authorizationId
+							|| claims.decision !== result.decision || claims.reason !== result.reason) {
+							throw new ApplicationError('Decision receipt does not match the checked action, authorization or result.');
+						}
+						if (workspaceId !== null && claims.workspace_id !== workspaceId) {
+							throw new ApplicationError('Decision receipt workspace does not match trusted credential configuration.');
+						}
+					} else throw new ApplicationError('Invalid decision receipt envelope.');
+					if (typeof receiptId !== 'string' || !/^rcp_[A-Za-z0-9_-]+$/.test(receiptId)) {
+						throw new ApplicationError('Invalid decision receipt ID.');
+					}
+				}
 
 				returnData.push({
 					json: {
 						protectedActionAllowed,
 						action,
+						authorizationId,
 						decision: result.decision,
 						reason: result.reason,
 						receipt: result.receipt,
+						receiptId,
+						receiptUrl: receiptId === null ? null : `${apiBaseUrl()}/v1/receipts/${encodeURIComponent(receiptId)}`,
+						workspaceId,
 						policyEval: result.policy_eval ?? null,
 						confirmNonce: result.confirm_nonce,
 						confirmExpiresAt: result.confirm_expires_at,

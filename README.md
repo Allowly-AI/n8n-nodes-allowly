@@ -146,7 +146,7 @@ Optional fields are body, timeoutMs and policyInput estimatedCostMicros. Identit
 
 Execute/Continue output the SDK state (`waiting_for_review`, `not_allowed`, `response_observed`, or `unknown`) and its authorization, review/evidence/outcome fields. Provider response bytes are not emitted. Status outputs `execution`, authenticated and compared to the original HTTP commitment. Every wrapper outputs `protectedActionAllowed: false`: dispatch already belongs to the SDK, never a following provider node. Receipt-mode outcomes are customer-reported; they do not independently prove a network request or business completion.
 
-A rejected review currently makes Continue fail closed with HTTP 409 `execution_review_not_available`. The template stops visibly at that node with the authority-unavailable reason; it does not invent a terminal SDK deny, loop back to Wait, or dispatch. The private journal remains available for reconciliation.
+After Continue validates the SDK's saved original request, an exact `execution_review_not_available` conflict triggers a bound review-status read. A recorded rejection finishes the node with `{state: "denied", decision: "deny", reason: "review_rejected", authorization, review, resolution, protectedActionAllowed: false, notificationOnly: false}`. The original `authorization` and source receipt stay unchanged; `resolution` contains the recorded time and source/resolution receipt IDs. No provider is called and no execution outcome or receipt is invented. The SDK journal and API execution remain waiting: this is a terminal node choice, not a new SDK execution state. A repeated Continue returns the same recorded denial. Generic conflicts, network errors, expired/revoked/unknown reviews and mismatched status still fail as errors, not human rejection.
 
 Webhook verification requires a native Webhook node with **Raw Body** enabled and its binary `data` field plus original headers. The SDK checks the exact bytes, signature, timestamp, workspace, schema and 16 KiB bound. Output is `{event, notificationOnly: true, protectedActionAllowed: false}`. Persist event IDs and match workspace/prompt/source receipt to the saved operation before an authenticated native wake. Notifications are not permission; read bound status and use SDK Continue.
 
@@ -156,7 +156,7 @@ The tested n8n 2.33.3 native URL has exactly `/webhook-waiting/<numeric executio
 
 Witnessed execution uses the unchanged native SDK/TLSNotary path and installed workspace witness configuration. The evidence directory is derived inside the fixed private root. Missing native witness setup fails before provider dispatch; receipt mode is not a witness substitute. Crash safety is at-most-one dispatch plus reconciliation, not guaranteed exactly-once completion.
 
-Local HTTP fixtures require explicit operator configuration `ALLOWLY_N8N_API_BASE_URL` and `ALLOWLY_N8N_ALLOW_LOCAL_API=true`. Keep this switch off for hosted use. The SDK's provider HTTPS/public-DNS checks are unchanged; the local integration lab makes only a fixed unauthenticated public GitHub GET (a remote read), not a customer action.
+All API-key operations, receipt polling, key reads and credential testing use the same operator endpoint. Production defaults to `https://api.allowly.ai`. A self-hosted operator may set `ALLOWLY_N8N_API_BASE_URL` to an HTTPS origin (no path, query or credentials). HTTP requires `ALLOWLY_N8N_ALLOW_LOCAL_API=true` and a loopback host or `host.docker.internal`; it is not a workflow or credential parameter. Keep the local switch off for hosted use. Authenticated calls never follow redirects. The SDK's provider HTTPS/public-DNS checks are unchanged; the local integration lab makes only a fixed unauthenticated public GitHub GET (a remote read), not a customer action.
 
 ## Operations
 
@@ -287,7 +287,7 @@ customer signature.
 
 ### Settle Budget
 
-Reports the actual cost of a budgeted check. Map **Check Receipt ID** from the budgeted action's `receipt.receipt_id`; for a multi-action check, use that action's receipt. Run settlement in the same workflow while the check receipt still exists.
+Reports the actual cost of a budgeted check. Map **Check Receipt ID** from the selected action's normalized `receiptId`; for a multi-action check, use the budgeted action's receipt ID. Run settlement in the same workflow while the check receipt still exists.
 
 ### Resolve Confirmation
 
@@ -349,7 +349,7 @@ Production webhook credentials must use the hosted Allowly API at `https://api.a
 
 ### Settle Budget fields
 
-- **Check Receipt ID**: `receipt.receipt_id` from the budgeted action in the **Check** output.
+- **Check Receipt ID**: normalized `receiptId` from the budgeted action in the **Check** output.
 - **Actual Cost (micro-USD)**: actual integer cost from `0` through `9007199254740991`. The check must include an estimate.
 - **Idempotency Key**: optional replay key; defaults to the n8n execution ID plus the check receipt ID.
 
@@ -446,11 +446,19 @@ The older **Seal JSON Record (API Key)** operation returns the same portable evi
 
 The node outputs the most restrictive action's convenient fields plus the full response. The order is `deny`, `escalate`, `confirm`, then `allow`, so a multi-action check cannot hide a denied action behind an earlier allowed one.
 
+`receiptId` works with pending and signed envelopes. `receiptUrl` uses the operator's validated API endpoint, not a URL supplied by the server. Both are null when no receipt is returned. `authorizationId` is the original requested authorization. A signed payload must match that authorization, selected action, decision and reason. The original `receipt` envelope is unchanged. Decoding a signed receipt does not verify its signature. `workspaceId` comes only from **Execution Workspace ID** in the credential; it is null when not configured. A configured workspace must match a signed receipt's payload.
+
+The refund and MCP crash-test examples require that trusted workspace field. Their Code nodes use the packaged decoder at `n8n-nodes-allowly/dist/nodes/Allowly/seal-verifier.js`. Install the same local package on the Code execution runtime (including a separate task runner, if used) and allow the package with `NODE_FUNCTION_ALLOW_EXTERNAL=n8n-nodes-allowly`. Keep other required allowlist entries, but do not use `*`. Missing decoder access stops the workflow before a protected action. These examples retain original JWS segments and report `receiptVerification: "not_performed"`; use the maintained verifier with independently trusted workspace/key settings for proof verification.
+
 ```json
 {
   "action": "email.send",
+  "authorizationId": "auth_from_request",
   "decision": "allow",
   "reason": "authorization_granted_action_active",
+  "receiptId": "rcp_...",
+  "receiptUrl": "https://api.allowly.ai/v1/receipts/rcp_...",
+  "workspaceId": "ws_from_credential",
   "receipt": {
     "status": "pending",
     "receipt_id": "rcp_..."

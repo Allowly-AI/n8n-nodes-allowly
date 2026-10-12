@@ -5,6 +5,8 @@ It targets **n8n-nodes-allowly 0.5.0** and uses n8n's standard HTTP, Code, IF,
 and Wait nodes. The workflow is inactive and contains no credentials or pinned data.
 Use a self-hosted n8n instance that permits this community node and Code nodes.
 
+Set **Execution Workspace ID** in the Allowly credential from your trusted workspace settings. Do not copy it from a receipt. Install the same Allowly package on the Code runtime or task runner and set `NODE_FUNCTION_ALLOW_EXTERNAL=n8n-nodes-allowly` (keep other needed entries; never use `*`). The workflow stops if the maintained receipt decoder is unavailable. **Fetch decision receipt** uses the node's normalized `receiptUrl`, so it follows `ALLOWLY_N8N_API_BASE_URL` and ignores server-supplied URLs. Signed receipt payloads must match the configured workspace. Export preserves the original JWS; decoding is not signature verification.
+
 Version **0.5.0** supports native **Allowly Identity**, Auth0, and unbound
 authorizations through the **Identity** selector.
 

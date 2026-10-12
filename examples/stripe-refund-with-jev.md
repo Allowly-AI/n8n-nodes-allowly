@@ -42,6 +42,8 @@ fixture as a live TypeSafe result. Change the message only after switching to
 
 ## Prepare Allowly once
 
+Set **Execution Workspace ID** in the Allowly credential from trusted workspace settings, never from receipt claims. The Code runtime (including a separate task runner) needs the same Allowly package and `NODE_FUNCTION_ALLOW_EXTERNAL=n8n-nodes-allowly`, alongside the existing `NODE_FUNCTION_ALLOW_BUILTIN=crypto`. Keep needed entries; do not use wildcard allowlists. Missing decoder access stops the workflow. Receipt fetching uses the node's operator-configured `receiptUrl`; export keeps the original JWS and checks the configured workspace. Decoding does not verify its signature.
+
 Create the catalog action `refund.create`, then publish this complete flat policy definition. The action decision and matching rules use fixed priority `deny > escalate > confirm > allow`. A rule cannot weaken the action decision. An action-level deny always wins; otherwise the first matching rule at the winning priority supplies its target and evidence. At least one condition within a rule must match (OR). When no rule wins, the action decision applies.
 
 ```json

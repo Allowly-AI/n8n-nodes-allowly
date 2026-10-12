@@ -1,1 +1,1 @@
-export { Allowly, verifyResolutionWebhook, commitCustomerHttpRequest, hashSealValue } from '@allowly/sdk';
+export { Allowly, AllowlyAPIError, verifyResolutionWebhook, commitCustomerHttpRequest, hashSealValue } from '@allowly/sdk';

@@ -181,6 +181,49 @@ function checkContext(parameters, response) {
 	};
 }
 
+test('Check normalizes pending/signed receipt routing without changing original envelopes or trusting their URL', async t => {
+	const oldUrl = process.env.ALLOWLY_N8N_API_BASE_URL;
+	t.after(() => { if (oldUrl === undefined) delete process.env.ALLOWLY_N8N_API_BASE_URL; else process.env.ALLOWLY_N8N_API_BASE_URL = oldUrl; });
+	process.env.ALLOWLY_N8N_API_BASE_URL = 'https://runtime.example.invalid/';
+	const official = JSON.parse(readFileSync(join(__dirname, '../../allowly-receipt-format/test-vectors.json')));
+	const receipt = official.should_verify.find(vector => decodeReceipt(vector.receipt).action === 'email.send').receipt;
+	const vector = { expected_workspace_id: 'ws_test' };
+	const receiptId = decodeReceipt(receipt).receipt_id;
+	const parameters = { operation: 'check', authorization: 'auth_unicode', actions: 'email.send', resource: '', session: '',
+		estimatedCostMicros: -1, workflowUser: '', workflowAgent: '', contextJson: {}, clientTimestamp: '' };
+	for (const envelope of [{ status: 'pending', receipt_id: receiptId, url: 'https://attacker.example/ignore' }, { status: 'signed', receipt }]) {
+		const context = checkContext(parameters, { results: { 'email.send': { decision: 'allow', reason: 'authorization_granted_action_active', receipt: envelope } } });
+		context.getCredentials = async () => ({ executionWorkspaceId: vector.expected_workspace_id });
+		const [[output]] = await new Allowly().execute.call(context);
+		assert.equal(output.json.receipt, envelope);
+		assert.equal(output.json.receiptId, receiptId);
+		assert.equal(output.json.receiptUrl, `https://runtime.example.invalid/v1/receipts/${receiptId}`);
+		assert.equal(output.json.workspaceId, vector.expected_workspace_id);
+		assert.equal(output.json.authorizationId, 'auth_unicode');
+		assert.equal(Object.hasOwn(output.json, 'signatureVerified'), false);
+	}
+	for (const envelope of [{ status: 'unknown', receipt_id: receiptId }, { status: 'pending', receipt_id: '../bad' },
+		{ status: 'signed', receipt: { receipt_id: receiptId, signature: 'old-flat' } }, { status: 'signed', receipt: { ...receipt, payload: '%' } }]) {
+		const context = checkContext(parameters, { results: { 'email.send': { decision: 'allow', receipt: envelope } } });
+		await assert.rejects(() => new Allowly().execute.call(context));
+	}
+	const context = checkContext(parameters, { results: { 'email.send': { decision: 'allow', reason: 'authorization_granted_action_active', receipt: { status: 'signed', receipt } } } });
+	context.getCredentials = async () => ({ executionWorkspaceId: 'ws_foreign' });
+	await assert.rejects(() => new Allowly().execute.call(context), /workspace does not match/);
+});
+
+test('Check rejects signed receipts for a crossed action, authorization, decision or reason', async () => {
+	const fixture = JSON.parse(readFileSync(join(__dirname, 'fixtures/workflow-receipts.json')));
+	const parameters = { operation: 'check', authorization: 'auth_parent', actions: 'refund.create', resource: '', session: '',
+		estimatedCostMicros: -1, workflowUser: '', workflowAgent: '', contextJson: {}, clientTimestamp: '' };
+	for (const name of ['cross_action', 'cross_authorization', 'cross_decision', 'cross_reason']) {
+		const context = checkContext(parameters, { results: { 'refund.create': { decision: 'allow', reason: 'authorization_granted_action_active',
+			receipt: { status: 'signed', receipt: fixture.receipts[name] } } } });
+		context.getCredentials = async () => ({ executionWorkspaceId: 'ws_test' });
+		await assert.rejects(() => new Allowly().execute.call(context), /does not match the checked action/);
+	}
+});
+
 test('check serializes an explicit zero-cost estimate', async () => {
 	const context = checkContext(
 		{
@@ -761,7 +804,7 @@ test('managed webhook is the v2 default while v1 keeps Check', () => {
 	const packageManifest = require('../package.json');
 	assert.deepEqual(description.version, [1, 2]);
 	assert.equal(description.defaultVersion, 2);
-	assert.deepEqual(Object.keys(new Allowly().methods.credentialTest), ['testSealWebhookCredential']);
+	assert.deepEqual(Object.keys(new Allowly().methods.credentialTest), ['testSealWebhookCredential', 'testApiCredential']);
 	assert.ok(packageManifest.n8n.nodes.includes('dist/nodes/Allowly/Allowly.node.js'));
 	assert.ok(
 		packageManifest.n8n.credentials.includes(

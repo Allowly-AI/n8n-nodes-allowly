@@ -51,6 +51,16 @@ function wire(kind = 'confirm', status = 'waiting_for_review') {
   };
 }
 
+function reviewStatus(kind = 'confirm', changes = {}) {
+  return { [kind === 'confirm' ? 'confirmation_id' : 'escalation_id']: kind === 'confirm' ? 'cnf_prompt' : 'esc_prompt',
+    authorization_id: original.authorizationId, action: original.action, resource: original.policyInput.resource,
+    status: 'rejected', expires_at: '2099-01-01T00:00:00Z', resolved_at: '2026-01-01T00:00:00Z',
+    source_receipt_id: 'rcp_source', resolution_receipt_id: 'rcp_resolution', authority_status: 'none',
+    ...(kind === 'confirm' ? { child_authorization_id: null, authority_expires_at: null } : { consumed_at: null }), ...changes };
+}
+const rejectedReview = { code: 409, body: { error: { code: 'execution_review_not_available',
+  message: 'Execution review is not approved with available authority' } } };
+
 function context(operation, request = original, credentials = {}, extra = {}) {
   return {
     getInputData: () => [{ json: {}, ...(extra.binary ? { binary: extra.binary } : {}) }],
@@ -100,8 +110,8 @@ for (const kind of ['confirm', 'escalate']) for (const approved of [true, false]
     const calls = [], sends = { count: 0 }, waiting = wire(kind), allow = wire(kind, 'approved');
     const claim = { operation_id: original.operationId, dispatch_state: 'claimed', approval: allow.approval,
       approval_sha256: allow.approval_sha256, approval_expires_at: allow.approval_expires_at, effective_evidence_mode: 'receipt' };
-    const rejected = { code: 409, body: { error: { code: 'execution_review_not_available', message: 'Execution review is not approved with available authority' } } };
-    transport([waiting, waiting, waiting, ...(approved ? [allow, claim, wire(kind, 'succeeded')] : [rejected, rejected])], calls);
+    transport([waiting, waiting, waiting, ...(approved ? [allow, claim, wire(kind, 'succeeded')]
+      : [rejectedReview, waiting, reviewStatus(kind), rejectedReview, waiting, reviewStatus(kind)])], calls);
     provider(sends);
     const first = await invoke('executeHttp');
     assert.equal(first.state, 'waiting_for_review'); assert.equal(first.review.kind, kind);
@@ -115,8 +125,14 @@ for (const kind of ['confirm', 'escalate']) for (const approved of [true, false]
       assert.equal(final.protectedActionAllowed, false); assert.equal(Object.hasOwn(final, 'providerResponse'), false);
       assert.deepEqual(await invoke('continueHttpExecution'), final);
     } else {
-      await assert.rejects(invoke('continueHttpExecution'), /not approved with available authority/);
-      await assert.rejects(invoke('continueHttpExecution'), /not approved with available authority/);
+      const denied = await invoke('continueHttpExecution');
+      assert.equal(denied.state, 'denied'); assert.equal(denied.decision, 'deny'); assert.equal(denied.reason, 'review_rejected');
+      assert.equal(denied.authorization.operationId, original.operationId);
+      assert.equal(denied.authorization.status, 'waiting_for_review'); // Do not invent a new API execution state.
+      assert.equal(denied.review.sourceReceiptId, 'rcp_source'); assert.equal(denied.resolution.resolutionReceiptId, 'rcp_resolution');
+      assert.equal(denied.resolution.status, 'rejected'); assert.equal(denied.protectedActionAllowed, false);
+      for (const field of ['response', 'providerResponse', 'evidencePackage', 'outcomePending']) assert.equal(Object.hasOwn(denied, field), false);
+      assert.deepEqual(await invoke('continueHttpExecution'), denied);
       assert.equal((await invoke('executeHttp')).state, 'waiting_for_review');
     }
     assert.equal(sends.count, approved ? 1 : 0);
@@ -139,6 +155,49 @@ test('changed request and wrong bound status fail closed before dispatch', async
   await assert.rejects(invoke('continueHttpExecution', { ...original, url: original.url + '&changed=1' }), /different customer HTTP inputs/);
   await assert.rejects(invoke('getExecution'), /unchanged original request/);
   assert.equal(sends.count, 0);
+}));
+
+for (const kind of ['confirm', 'escalate']) {
+  for (const changes of [
+    { source_receipt_id: 'rcp_other' }, { authorization_id: 'auth_other' }, { action: 'other.action' },
+    { resource: 'other:resource' }, { resolved_at: null }, { resolution_receipt_id: null },
+  ]) test(`${kind}: rejected status with ${Object.keys(changes)[0]} mismatch is not a denial`, async t => isolated(t, async () => {
+    const calls = [], sends = { count: 0 };
+    transport([wire(kind), rejectedReview, wire(kind), reviewStatus(kind, changes)], calls); provider(sends);
+    await invoke('executeHttp'); await assert.rejects(invoke('continueHttpExecution'), /bound recorded rejection/);
+    assert.equal(sends.count, 0);
+  }));
+  for (const status of ['pending', 'expired', 'unknown', 'revoked']) {
+    test(`${kind}: ${status} review is not a human rejection`, async t => isolated(t, async () => {
+      const calls = [], sends = { count: 0 };
+      const statusWire = reviewStatus(kind, { status: status === 'revoked' ? 'approved' : status,
+        authority_status: status === 'revoked' ? 'revoked' : 'none',
+        resolved_at: ['pending', 'expired'].includes(status) ? null : '2026-01-01T00:00:00Z',
+        resolution_receipt_id: status === 'pending' ? null : 'rcp_resolution' });
+      transport([wire(kind), rejectedReview, wire(kind), statusWire], calls); provider(sends);
+      await invoke('executeHttp'); await assert.rejects(invoke('continueHttpExecution'), /not approved with available authority/);
+      assert.equal(sends.count, 0);
+    }));
+  }
+}
+
+test('generic conflicts, network faults and status failures never become human denial', async t => isolated(t, async () => {
+  const calls = [], sends = { count: 0 };
+  transport([wire(), { code: 409, body: { error: { code: 'idempotency_conflict', message: 'generic conflict' } } },
+    new Error('network timeout'), rejectedReview, wire(), new Error('status unavailable')], calls); provider(sends);
+  await invoke('executeHttp');
+  await assert.rejects(invoke('continueHttpExecution'), /generic conflict/); assert.equal(calls.length, 2);
+  await assert.rejects(invoke('continueHttpExecution'), /Allowly request failed/); assert.equal(calls.length, 3);
+  await assert.rejects(invoke('continueHttpExecution'), /Allowly request failed/); assert.equal(calls.length, 6);
+  assert.equal(sends.count, 0);
+}));
+
+test('changed policy input is rejected by the SDK saved-request guard before rejection lookup', async t => isolated(t, async () => {
+  const calls = [], sends = { count: 0 }; transport([wire()], calls); provider(sends);
+  await invoke('executeHttp');
+  await assert.rejects(invoke('continueHttpExecution', { ...original,
+    policyInput: { ...original.policyInput, context: { scenario: 'changed' } } }), /different customer HTTP inputs/);
+  assert.equal(calls.length, 1); assert.equal(sends.count, 0);
 }));
 
 test('ambiguous claim and outcome recovery use SDK journal and never resend', async t => isolated(t, async () => {
@@ -192,3 +251,31 @@ test('Standard Webhook verification preserves bytes, bounds and workspace; never
   await assert.rejects(invoke('verifyResolutionWebhook', original, credential, { ...extra, bytes: Buffer.alloc(16 * 1024 + 1) }), /at most 16 KiB/);
   await assert.rejects(invoke('verifyResolutionWebhook', original, credential, { ...extra, binary: undefined }), /original raw binary/);
 });
+
+test('generic 409 stays an error even when a rejected review could be fetched', async t => isolated(t, async () => {
+  const calls = [], sends = { count: 0 };
+  transport([wire(), { code: 409, body: { error: { code: 'idempotency_conflict', message: 'generic conflict' } } },
+    wire(), reviewStatus()], calls); provider(sends);
+  await invoke('executeHttp'); await assert.rejects(invoke('continueHttpExecution'), /generic conflict/);
+  assert.equal(calls.length, 2); assert.equal(sends.count, 0);
+}));
+
+test('a different operation in rejection lookup is not a denial', async t => isolated(t, async () => {
+  const calls = [], sends = { count: 0 }, other = wire();
+  other.operation_id = 'op_other'; other.request_descriptor.operation_id = 'op_other';
+  transport([wire(), rejectedReview, other, reviewStatus()], calls); provider(sends);
+  await invoke('executeHttp');
+  await assert.rejects(invoke('continueHttpExecution'), /execution response does not match the requested operation/);
+  assert.equal(calls.length, 3); assert.equal(sends.count, 0);
+}));
+
+for (const kind of ['confirm', 'escalate']) {
+  test(`${kind} status cannot swap its body prompt ID`, async t => isolated(t, async () => {
+    const calls = [], sends = { count: 0 };
+    const key = kind === 'confirm' ? 'confirmation_id' : 'escalation_id';
+    transport([wire(kind), rejectedReview, wire(kind), reviewStatus(kind, { [key]: kind === 'confirm' ? 'cnf_other' : 'esc_other' })], calls);
+    provider(sends); await invoke('executeHttp');
+    await assert.rejects(invoke('continueHttpExecution'), /does not match the request/);
+    assert.equal(calls.length, 4); assert.equal(sends.count, 0);
+  }));
+}

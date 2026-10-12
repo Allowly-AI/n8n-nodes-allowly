@@ -4,6 +4,10 @@ const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 const vm = require('node:vm');
 const { Allowly } = require('../dist/nodes/Allowly/Allowly.node.js');
+const receiptVerifier = require('../dist/nodes/Allowly/seal-verifier.js');
+const receiptVector = JSON.parse(readFileSync(join(__dirname, 'fixtures/workflow-receipts.json')));
+const signedReceipt = receiptVector.receipts.refund;
+const signedReceiptId = receiptVerifier.decodeReceipt(signedReceipt).receipt_id;
 
 const workflowText = readFileSync(join(__dirname, '../examples/stripe-refund-with-jev.json'), 'utf8');
 const workflow = JSON.parse(workflowText);
@@ -21,6 +25,39 @@ const request = {
 	customerMessage: 'I was charged twice for September. Please refund the duplicate charge.',
 	jevMode: 'mock',
 };
+
+test('Jev workflow preserves original signed JWS and uses the operator receipt endpoint', async t => {
+	const oldUrl = process.env.ALLOWLY_N8N_API_BASE_URL, oldLocal = process.env.ALLOWLY_N8N_ALLOW_LOCAL_API;
+	t.after(() => {
+		for (const [key, value] of [['ALLOWLY_N8N_API_BASE_URL', oldUrl], ['ALLOWLY_N8N_ALLOW_LOCAL_API', oldLocal]]) {
+			if (value === undefined) delete process.env[key]; else process.env[key] = value;
+		}
+	});
+	process.env.ALLOWLY_N8N_API_BASE_URL = 'http://127.0.0.1:18182/';
+	process.env.ALLOWLY_N8N_ALLOW_LOCAL_API = 'true';
+	const result = await run({ checkSigned: true });
+	assert.equal(result.error, null);
+	const evidence = result.outputs['Export refund evidence'];
+	assert.deepEqual(evidence.decisionReceipt, { status: 'signed', receipt: signedReceipt });
+	assert.equal(evidence.receiptVerification, 'not_performed');
+	assert.equal(result.requests.find(call => call.credential === 'allowlyApi').url, `http://127.0.0.1:18182/v1/receipts/${signedReceiptId}`);
+	assert.equal(result.requests.some(call => call.url.startsWith('https://api.allowly.ai')), false);
+});
+
+for (const [name, options] of [
+	['missing trusted workspace', { credentials: {} }],
+	['foreign signed workspace', { signed: true, credentials: { executionWorkspaceId: 'ws_other' } }],
+	['unknown receipt status', { receiptResponse: { status: 'unknown', receipt_id: 'rcp_test1' } }],
+	['old flat signed receipt', { receiptResponse: { status: 'signed', receipt: { receipt_id: 'rcp_test1', signature: 'old-flat' } } }],
+	['malformed JWS', { receiptResponse: { status: 'signed', receipt: { ...signedReceipt, payload: '%' } } }],
+	...['cross_action', 'cross_authorization', 'cross_decision', 'cross_reason'].map(name =>
+		[name, { signed: true, receiptResponse: { status: 'signed', receipt: receiptVector.receipts[name] } }]),
+]) test('Jev ' + name + ' fails closed without success evidence', async () => {
+	const result = await run(options);
+	assert.ok(result.error);
+	assert.equal(result.outputs['Export refund evidence'], undefined);
+	if (name === 'missing trusted workspace') assert.equal(result.requests.some(call => call.url === 'https://api.stripe.com/v1/refunds'), false);
+});
 
 function liveJevDecision(overrides = {}) {
 	const decision = {
@@ -80,6 +117,7 @@ async function run(options = {}) {
 	function scope() {
 		return {
 			require: (name) => {
+				if (name === 'n8n-nodes-allowly/dist/nodes/Allowly/seal-verifier.js') return receiptVerifier;
 				assert.equal(name, 'crypto', 'only the crypto builtin is available to Code nodes');
 				return require('node:crypto');
 			},
@@ -102,8 +140,9 @@ async function run(options = {}) {
 			const decision = (options.decisions ?? ['allow'])[checks++] ?? 'allow';
 			const result = {
 				decision,
-				reason: 'test_reason',
-				receipt: { status: 'pending', receipt_id: `rcp_test${checks}` },
+				reason: 'authorization_granted_action_active',
+				receipt: options.checkSigned ? { status: 'signed', receipt: signedReceipt }
+					: { status: 'pending', receipt_id: options.signed ? signedReceiptId : `rcp_test${checks}`, url: 'https://wrong-host.example/ignore' },
 				...(decision === 'confirm' ? { confirm_nonce: 'nonce_demo' } : {}),
 				...(decision === 'escalate' ? { escalation_id: 'esc_demo' } : {}),
 			};
@@ -139,7 +178,7 @@ async function run(options = {}) {
 				);
 				const context = {
 					getInputData: () => [{ json: item }],
-					getCredentials: async () => ({}),
+					getCredentials: async () => options.credentials ?? { executionWorkspaceId: receiptVector.expected_workspace_id },
 					getNodeParameter: (name) => params[name],
 					getExecutionId: () => executionId,
 					getNode: () => node,
@@ -194,8 +233,10 @@ async function run(options = {}) {
 						currency: 'usd',
 						status: 'succeeded',
 					};
-				} else if (call.url.startsWith('https://api.allowly.ai/v1/receipts/')) {
-					item = { status: 'pending', receipt_id: outputs['Refund result'].decision.receiptId };
+				} else if (call.url.startsWith((process.env.ALLOWLY_N8N_API_BASE_URL ?? 'https://api.allowly.ai').replace(/\/$/, '') + '/v1/receipts/')) {
+					item = options.receiptResponse ?? (options.signed || options.checkSigned
+						? { status: 'signed', receipt: signedReceipt }
+						: { status: 'pending', receipt_id: outputs['Refund result'].decision.receiptId });
 				} else {
 					throw new Error(`Unexpected HTTP request: ${call.url}`);
 				}
